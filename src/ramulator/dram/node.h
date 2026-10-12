@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 #include "ramulator/base/type.h"
 #include "ramulator/dram/dram_spec.h"
@@ -47,6 +48,9 @@ struct DRAMNode {
   std::vector<std::deque<Clk_t>> m_shared_window_history;  // Shared rolling-window histories
 
   std::unordered_map<int, int> m_row_state;  // The state of the rows, if I am a bank-ish node
+
+  // DDRAM-P> independent active-row states (-1 means that corresponding view is precharged)
+  std::array<int, 2> m_ddram_active_rows = {-1, -1};
 
   std::vector<std::unique_ptr<NodeExtension>> m_ext;  // Feature-owned state, indexed by extension slot
 
