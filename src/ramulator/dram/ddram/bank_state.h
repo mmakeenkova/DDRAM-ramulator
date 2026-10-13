@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ramulator/dram/node.h"
+#include <assert.h>
 
 namespace Ramulator::DDRAM {
 
@@ -17,7 +18,18 @@ inline bool view_open(const DRAMNode* bank, int view) {
   return bank->m_ddram_active_rows[view] != CLOSED;
 }
 
+inline bool row_open_in_other_view(const DRAMNode* bank, int view, int row) {
+  assert(view == VIEW_A || view == VIEW_B);
+
+  const int other_view = (view == VIEW_A) ? VIEW_B : VIEW_A;
+  return row_hit(bank, other_view, row);
+}
+
 inline void activate(DRAMNode* bank, int view, int row) {
+  assert(view == VIEW_A || view == VIEW_B);
+  assert(!view_open(bank, view));
+  // View conflict: a row can only be open in ONE view
+  assert(!row_open_in_other_view(bank, view, row));
   bank->m_ddram_active_rows[view] = row;
 }
 
