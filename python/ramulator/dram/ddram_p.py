@@ -1,5 +1,6 @@
 from ramulator.dram.ddr5 import DDR5
 from ramulator.dram.spec import TimingConstraint
+from copy import deepcopy
 
 class DDRAM_P(DDR5):
     name = "DDRAM_P"
@@ -33,7 +34,42 @@ class DDRAM_P(DDR5):
         "PREsb": "DDRAM_PREsb",
     }
 
-    timing_constraints = list(DDR5.timing_constraints) + [
+    timing_constraints = deepcopy(DDR5.timing_constraints)
+    activation_commands = ["ACT", "ACT_A", "ACT_B"]
+
+    for constraint in timing_constraints:
+
+        # apply nRRDS to ACT_A and ACT_B also
+        if (
+            constraint.level == "Rank"
+            and constraint.latency == "nRRDS"
+            and constraint.preceding == ["ACT"]
+            and constraint.following == ["ACT"]
+        ):
+            constraint.preceding = activation_commands.copy()
+            constraint.following = activation_commands.copy()
+
+        # apply nRRDL to ACT_A and ACT_B also
+        elif (
+            constraint.level == "BankGroup"
+            and constraint.latency == "nRRDL"
+            and constraint.preceding == ["ACT"]
+            and constraint.following == ["ACT"]
+        ):
+            constraint.preceding = activation_commands.copy()
+            constraint.following = activation_commands.copy()
+
+        # four-activation window (nFAW)
+        elif (
+            constraint.level == "Rank"
+            and constraint.latency == "nFAW"
+            and constraint.window == 4
+            and constraint.shared_window
+        ):
+            constraint.preceding.extend(["ACT_A", "ACT_B"])
+            constraint.following.extend(["ACT_A", "ACT_B"])
+
+    timing_constraints += [
         TimingConstraint(
             level="Bank",
             preceding=["ACT_A"],
