@@ -72,7 +72,14 @@ def generate_header(cls):
     timing_enum = "\n".join(timing_lines)
 
     # CommandImpls tuple
-    cmd_impl_entries = [f"Cmd::{c}<{name}>" for c in cls.commands]
+    #cmd_impl_entries = [f"Cmd::{c}<{name}>" for c in cls.commands]
+    # allow to use custom command implementation
+    overrides = getattr(cls, "command_impl_overrides", {})
+    cmd_impl_entries = [
+        f"Cmd::{overrides.get(c, c)}<{name}>"
+        for c in cls.commands
+    ]
+
     impl_lines = []
     current_line = "      "
     for i, entry in enumerate(cmd_impl_entries):
@@ -103,8 +110,19 @@ def generate_header(cls):
     supported_requests_body = "\n".join(req_entries)
 
     # Command include headers
-    cmd_header_names = sorted(set(cls.commands))
-    cmd_includes = "\n".join(f'#include "ramulator/dram/commands/{h}.h"' for h in cmd_header_names)
+    #cmd_header_names = sorted(set(cls.commands))
+    #cmd_includes = "\n".join(f'#include "ramulator/dram/commands/{h}.h"' for h in cmd_header_names)
+
+    # command implementation overrides
+    overrides = getattr(cls, "command_impl_overrides", {})
+
+    # command include headers
+    cmd_header_names = sorted(set(overrides.get(c, c) for c in cls.commands))
+
+    cmd_includes = "\n".join(
+        f'#include "ramulator/dram/commands/{h}.h"'
+        for h in cmd_header_names
+    )
 
     # set_names call arguments
     level_name_entries = ", ".join(f'"{n}"' for n in level_names)

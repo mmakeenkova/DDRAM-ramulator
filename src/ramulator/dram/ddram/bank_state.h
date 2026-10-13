@@ -25,4 +25,14 @@ inline void precharge(DRAMNode* bank, int view) {
   bank->m_ddram_active_rows[view] = CLOSED;
 }
 
+inline void precharge_all(DRAMNode* bank) {
+  precharge(bank, VIEW_A);
+  precharge(bank, VIEW_B);
+}
+
+inline bool any_view_open(const DRAMNode* bank) {
+  return view_open(bank, VIEW_A) ||
+         view_open(bank, VIEW_B);
+}
+
 }  // namespace Ramulator::DDRAM

@@ -19,6 +19,7 @@ struct DDRAM_ACT {
   static int preq(DRAMNode* bank, int cmd, const AddrVec_t& addr_vec, Clk_t clk) {
     const int row = addr_vec[T::Level::Row];
 
+    // view A is closed, no need to issue PRE
     if (!DDRAM::view_open(bank, View)) {
       return cmd;
     }
