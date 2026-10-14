@@ -15,12 +15,14 @@ void DRAMDevice::set_channel_id(int channel_id) {
 }
 
 void DRAMDevice::issue_command(int command, const AddrVec_t& addr_vec, Clk_t clk) {
-  m_root->update_timing(command, addr_vec, clk);
+  const auto timing_addr = get_timing_addr(command, addr_vec);
+  m_root->update_timing(command, timing_addr, clk);
   apply_action(command, addr_vec, clk);
 }
 
 bool DRAMDevice::check_timing(int command, const AddrVec_t& addr_vec, Clk_t clk) {
-  return m_root->check_timing(command, addr_vec, clk);
+  const auto timing_addr = get_timing_addr(command, addr_vec);
+  return m_root->check_timing(command, timing_addr, clk);
 }
 
 int DRAMDevice::get_preq_command(int command, const AddrVec_t& addr_vec, Clk_t clk) {
@@ -83,6 +85,20 @@ void DRAMDevice::apply_action(int command, const AddrVec_t& addr_vec, Clk_t clk)
   for_each_target_bank(command, addr_vec, [&](int flat_bank_id) {
     action_fn(m_bank_nodes[flat_bank_id], command, addr_vec, clk);
   });
+}
+
+AddrVec_t DRAMDevice::get_timing_addr(
+    int command,
+    const AddrVec_t& addr_vec
+) const {
+  AddrVec_t timing_addr = addr_vec;
+
+  if (m_spec->bank_targets[command] == BankTarget::SameBank) {
+    // Same bank index across all bank groups.
+    timing_addr[m_spec->get_level_id("BankGroup")] = -1;
+  }
+
+  return timing_addr;
 }
 
 }  // namespace Ramulator

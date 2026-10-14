@@ -6,6 +6,9 @@
  *
  * Regenerate:   python -m ramulator codegen DDRAM_P
  ******************************************************************************/
+#include "ramulator/dram/dram_spec.h"
+
+#include "ramulator/dram/commands/populate.h"
 #include "ramulator/dram/commands/ACT.h"
 #include "ramulator/dram/commands/ACT_A.h"
 #include "ramulator/dram/commands/ACT_B.h"
@@ -26,8 +29,6 @@
 #include "ramulator/dram/commands/WRA.h"
 #include "ramulator/dram/commands/WR_A.h"
 #include "ramulator/dram/commands/WR_B.h"
-#include "ramulator/dram/commands/populate.h"
-#include "ramulator/dram/dram_spec.h"
 
 namespace Ramulator {
 
@@ -37,77 +38,24 @@ class DDRAM_P : public DRAMSpec {
     enum : int { Channel, Rank, BankGroup, Bank, Row, Column, COUNT };
   };
   struct Command {
-    enum : int {
-      ACT,
-      PREpb,
-      PREab,
-      RD,
-      WR,
-      RDA,
-      WRA,
-      REFab,
-      PREsb,
-      REFsb,
-      RFMab,
-      RFMsb,
-      ACT_A,
-      ACT_B,
-      PRE_A,
-      PRE_B,
-      RD_A,
-      RD_B,
-      WR_A,
-      WR_B,
-      COUNT
-    };
+    enum : int { ACT, PREpb, PREab, RD, WR, RDA, WRA, REFab, PREsb, REFsb, RFMab, RFMsb, ACT_A, ACT_B, PRE_A, PRE_B, RD_A, RD_B, WR_A, WR_B, COUNT };
   };
   struct State {
     enum : int { Opened, Closed, N_A, COUNT };
   };
   struct Timing {
     enum : int {
-      rate,
-      nBL,
-      nCL,
-      nRCD,
-      nRP,
-      nRAS,
-      nRC,
-      nWR,
-      nRTP,
-      nCWL,
-      nPPD,
-      nCCDS,
-      nCCDL,
-      nCCDS_WR,
-      nCCDL_WR,
-      nCCDM,
-      nCCDM_WR,
-      nWTRM,
-      nRTW,
-      nRRDS,
-      nRRDL,
-      nWTRS,
-      nWTRL,
-      nFAW,
-      nRFC,
-      nREFI,
-      nRFCsb,
-      nCS,
-      tCK_ps,
-      nRFM,
-      nRFMsb,
-      nREFSBRD,
-      COUNT
+    rate, nBL, nCL, nRCD, nRP, nRAS, nRC, nWR, nRTP, nCWL, nPPD, nCCDS, nCCDL, nCCDS_WR, nCCDL_WR, nCCDM, nCCDM_WR,
+    nWTRM, nRTW, nRRDS, nRRDL, nWTRS, nWTRL, nFAW, nRFC, nREFI, nRFCsb, nCS, tCK_ps, nRFM, nRFMsb, nREFSBRD, COUNT
     };
   };
 
-  using CommandImpls =
-      std::tuple<Cmd::ACT<DDRAM_P>, Cmd::PREpb<DDRAM_P>, Cmd::DDRAM_PREab<DDRAM_P>, Cmd::RD<DDRAM_P>, Cmd::WR<DDRAM_P>,
-                 Cmd::RDA<DDRAM_P>, Cmd::WRA<DDRAM_P>, Cmd::REFab<DDRAM_P>, Cmd::DDRAM_PREsb<DDRAM_P>,
-                 Cmd::REFsb<DDRAM_P>, Cmd::RFMab<DDRAM_P>, Cmd::RFMsb<DDRAM_P>, Cmd::ACT_A<DDRAM_P>,
-                 Cmd::ACT_B<DDRAM_P>, Cmd::PRE_A<DDRAM_P>, Cmd::PRE_B<DDRAM_P>, Cmd::RD_A<DDRAM_P>, Cmd::RD_B<DDRAM_P>,
-                 Cmd::WR_A<DDRAM_P>, Cmd::WR_B<DDRAM_P> >;
+  using CommandImpls = std::tuple<
+      Cmd::ACT<DDRAM_P>, Cmd::PREpb<DDRAM_P>, Cmd::DDRAM_PREab<DDRAM_P>, Cmd::RD<DDRAM_P>, Cmd::WR<DDRAM_P>,
+      Cmd::RDA<DDRAM_P>, Cmd::WRA<DDRAM_P>, Cmd::REFab<DDRAM_P>, Cmd::DDRAM_PREsb<DDRAM_P>, Cmd::REFsb<DDRAM_P>,
+      Cmd::RFMab<DDRAM_P>, Cmd::RFMsb<DDRAM_P>, Cmd::ACT_A<DDRAM_P>, Cmd::ACT_B<DDRAM_P>, Cmd::PRE_A<DDRAM_P>,
+      Cmd::PRE_B<DDRAM_P>, Cmd::RD_A<DDRAM_P>, Cmd::RD_B<DDRAM_P>, Cmd::WR_A<DDRAM_P>, Cmd::WR_B<DDRAM_P>
+  >;
 
   DDRAM_P(const ConfigNode& config) {
     // Counts
@@ -118,29 +66,27 @@ class DDRAM_P : public DRAMSpec {
 
     // String name maps + reverse lookup vectors
     set_names(levels, level_names, {"Channel", "Rank", "BankGroup", "Bank", "Row", "Column"});
-    set_names(commands, command_names,
-              {"ACT",   "PREpb", "PREab", "RD",    "WR",    "RDA",   "WRA",  "REFab", "PREsb", "REFsb",
-               "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B",  "WR_A",  "WR_B"});
+    set_names(commands, command_names, {"ACT", "PREpb", "PREab", "RD", "WR", "RDA", "WRA", "REFab", "PREsb", "REFsb", "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B", "WR_A", "WR_B"});
     set_names(states, state_names, {"Opened", "Closed", "N_A"});
-    set_names(
-        timings, timing_names,
-        {"rate",  "nBL",   "nCL",      "nRCD",     "nRP",    "nRAS",     "nRC",    "nWR",  "nRTP",   "nCWL",    "nPPD",
-         "nCCDS", "nCCDL", "nCCDS_WR", "nCCDL_WR", "nCCDM",  "nCCDM_WR", "nWTRM",  "nRTW", "nRRDS",  "nRRDL",   "nWTRS",
-         "nWTRL", "nFAW",  "nRFC",     "nREFI",    "nRFCsb", "nCS",      "tCK_ps", "nRFM", "nRFMsb", "nREFSBRD"});
+    set_names(timings, timing_names, {
+        "rate", "nBL", "nCL", "nRCD", "nRP", "nRAS", "nRC", "nWR", "nRTP", "nCWL", "nPPD", "nCCDS", "nCCDL",
+        "nCCDS_WR", "nCCDL_WR", "nCCDM", "nCCDM_WR", "nWTRM", "nRTW", "nRRDS", "nRRDL", "nWTRS", "nWTRL", "nFAW",
+        "nRFC", "nREFI", "nRFCsb", "nCS", "tCK_ps", "nRFM", "nRFMsb", "nREFSBRD"
+    });
 
     // Static spec data
     internal_prefetch_size = 16;
     init_states = {
-        State::N_A,     // Channel
-        State::N_A,     // Rank
-        State::N_A,     // BankGroup
-        State::Closed,  // Bank
-        State::Closed,  // Row
-        State::N_A,     // Column
+        State::N_A,           // Channel
+        State::N_A,           // Rank
+        State::N_A,           // BankGroup
+        State::Closed,        // Bank
+        State::Closed,        // Row
+        State::N_A,           // Column
     };
     supported_requests = {
-        Command::RD,  // Read -> RD
-        Command::WR,  // Write -> WR
+        Command::RD,        // Read -> RD
+        Command::WR,        // Write -> WR
     };
 
     // Runtime config (organization, timing values, timing constraints)
@@ -152,7 +98,7 @@ class DDRAM_P : public DRAMSpec {
 };
 
 // Self-registration
-static bool _dram_ddram_p =
-    DRAMSpec::register_standard("DDRAM_P", [](const ConfigNode& config) { return std::make_unique<DDRAM_P>(config); });
+static bool _dram_ddram_p = DRAMSpec::register_standard(
+    "DDRAM_P", [](const ConfigNode& config) { return std::make_unique<DDRAM_P>(config); });
 
 }  // namespace Ramulator

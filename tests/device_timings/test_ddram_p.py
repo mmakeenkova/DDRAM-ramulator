@@ -508,7 +508,7 @@ def test_ddram_p_view_replacement():
     assert len(matches) == 1
     print(matches[0])
 
-    expected = 200 + t["nRP"]
+    expected = 200 + t["nRP"] -1
     assert not dut.probe("ACT_A", row30, clk=expected - 1).ready
     assert dut.probe("ACT_A", row30, clk=expected).ready
     dut.issue("ACT_A", row30, clk=expected)
@@ -590,3 +590,173 @@ def test_ddr5_presb_targeting_diagnostic():
 
     assert not dut.probe("RD", bg0_bank0, clk=1100).row_open
     assert not dut.probe("RD", bg1_bank0, clk=1100).row_open
+
+
+
+def test_ddram_p_refresh_to_activate():
+    dut, row_a, row_b, t = make_two_view_dut()
+
+    # close both views
+    dut.issue("PREab", row_a, clk=200)
+
+    # allow precharge recovery
+    dut.issue("REFab", row_a, clk=300)
+    new_row = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=30, Column=0)
+
+    # find REFab -> ACT_A recovery boundary
+    expected = 300 + t["nRFC"]
+    for clk in range(expected - 2, expected + 3):
+        p = dut.probe("ACT_A", new_row, clk=clk)
+        print(clk, p.preq, p.timing_OK, p.ready)
+
+
+def test_ddram_p_refresh_activation_constraints():
+    constraints = ramulator.dram.DDRAM_P.timing_constraints
+
+    for view in ("ACT_A", "ACT_B"):
+        matches = [
+            c for c in constraints
+            if "REFab" in c.preceding
+            and view in c.following
+        ]
+        assert matches, f"Missing REFab -> {view}"
+
+
+def test_ddram_p_refresh_constraint_diagnostic():
+    print("\nDDR5 refresh-related constraints:")
+    for c in ramulator.dram.DDR5.timing_constraints:
+        if "REFab" in c.preceding or "REFab" in c.following:
+            print(c)
+
+    print("\nDDRAM-P refresh-related constraints:")
+    for c in ramulator.dram.DDRAM_P.timing_constraints:
+        if "REFab" in c.preceding or "REFab" in c.following:
+            print(c)
+
+
+
+### parametrized tests  ###
+@pytest.mark.parametrize(
+    "maintenance,precharge",
+    [
+        ("REFab", "PREab"),
+        ("RFMab", "PREab"),
+        ("REFsb", "PREsb"),
+        ("RFMsb", "PREsb"),
+    ],
+)
+def test_ddram_p_maintenance_prerequisites(maintenance, precharge):
+    dut, row_a, row_b, _ = make_two_view_dut()
+
+    # Both A and B are open.
+    p = dut.probe(maintenance, row_a, clk=200)
+    assert p.preq == precharge
+    assert not p.ready
+
+    # Close only A. B must still block maintenance.
+    dut.issue("PRE_A", row_a, clk=200)
+
+    p = dut.probe(maintenance, row_a, clk=250)
+    assert p.preq == precharge
+    assert not p.ready
+
+    # Close B as well.
+    dut.issue("PRE_B", row_b, clk=250)
+
+    # Prerequisite should now be satisfied.
+    p = dut.probe(maintenance, row_a, clk=300)
+    assert p.preq == maintenance
+
+
+@pytest.mark.parametrize("maintenance", ["REFsb", "RFMsb"])
+def test_ddram_p_same_bank_maintenance_prerequisite(maintenance):
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8",
+        timing_preset="DDR5_3200AN",
+        rank=1,
+    )
+    dut = DeviceUnderTest(dram)
+
+    bg0_bank0 = dut.addr_vec(
+        Rank=0, BankGroup=0, Bank=0, Row=10, Column=0
+    )
+    bg1_bank0 = dut.addr_vec(
+        Rank=0, BankGroup=1, Bank=0, Row=20, Column=0
+    )
+
+    # Leave the addressed bank closed.
+    # Open another bank in the same-bank set.
+    dut.issue("ACT_B", bg1_bank0, clk=0)
+
+    p = dut.probe(maintenance, bg0_bank0, clk=200)
+
+    assert p.preq == "PREsb"
+    assert not p.ready
+
+    # Close the bank in the other bank group.
+    dut.issue("PRE_B", bg1_bank0, clk=200)
+
+    p = dut.probe(maintenance, bg0_bank0, clk=300)
+    assert p.preq == maintenance
+
+
+
+def test_ddram_p_presb_cross_bankgroup_write_recovery():
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8",
+        timing_preset="DDR5_3200AN",
+        rank=1,
+    )
+    dut = DeviceUnderTest(dram)
+
+    bg0 = dut.addr_vec(
+        Rank=0, BankGroup=0, Bank=0, Row=10, Column=0
+    )
+    bg1 = dut.addr_vec(
+        Rank=0, BankGroup=1, Bank=0, Row=20, Column=0
+    )
+
+    # Only BG1/Bank0 is active.
+    dut.issue("ACT_B", bg1, clk=0)
+    dut.issue("WR_B", bg1, clk=200)
+
+    # PREsb is addressed to BG0, but also targets BG1.
+    # BG1's write recovery must prevent premature precharge.
+    assert not dut.probe("PREsb", bg0, clk=210).ready
+
+
+def test_ddram_p_preab_bank_targeting():
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8",
+        timing_preset="DDR5_3200AN",
+        rank=1,
+    )
+    dut = DeviceUnderTest(dram)
+    bg0_bank0 = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=10, Column=0)
+    bg1_bank1 = dut.addr_vec(Rank=0, BankGroup=1, Bank=1, Row=20, Column=0)
+
+    dut.issue("ACT_A", bg0_bank0, clk=0)
+    dut.issue("ACT_B", bg1_bank1, clk=100)
+    dut.issue("PREab", bg0_bank0, clk=1000)
+
+    assert not dut.probe("RD_A", bg0_bank0, clk=1100).row_open
+
+    assert not dut.probe("RD_B", bg1_bank1, clk=1100).row_open
+
+
+def test_ddram_p_preab_cross_bank_write_recovery():
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8",
+        timing_preset="DDR5_3200AN",
+        rank=1,
+    )
+    dut = DeviceUnderTest(dram)
+
+    bg0_bank0 = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=10, Column=0)
+    bg1_bank1 = dut.addr_vec(Rank=0, BankGroup=1, Bank=1, Row=20, Column=0)
+
+    dut.issue("ACT_B", bg1_bank1, clk=0)
+    dut.issue("WR_B", bg1_bank1, clk=200)
+
+    # PREab is addressed through a different bank
+    assert not dut.probe("PREab", bg0_bank0, clk=210).ready

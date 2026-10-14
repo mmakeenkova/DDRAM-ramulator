@@ -52,10 +52,22 @@ class DDRAM_P(DDR5):
     activation_commands = ["ACT", "ACT_A", "ACT_B"]
     read_commands = ["RD", "RD_A", "RD_B"]
     write_commands = ["WR", "WR_A", "WR_B"]
+    maintenance_commands = {"REFab", "REFsb", "RFMab", "RFMsb"}
 
-    
+    def extend_unique(commands, additions):
+        """Add commands without introducing duplicates."""
+        for cmd in additions:
+            if cmd not in commands:
+                commands.append(cmd)
+
+
     for constraint in timing_constraints:
-        # apply nRRDS to ACT_A and ACT_B also
+
+        # ---------------------------------------------------------
+        # 1. Shared activation constraints
+        # ---------------------------------------------------------
+
+        # nRRDS: activation spacing across bank groups
         if (
             constraint.level == "Rank"
             and constraint.latency == "nRRDS"
@@ -65,7 +77,7 @@ class DDRAM_P(DDR5):
             constraint.preceding = activation_commands.copy()
             constraint.following = activation_commands.copy()
 
-        # apply nRRDL to ACT_A and ACT_B also
+        # nRRDL: activation spacing within a bank group
         elif (
             constraint.level == "BankGroup"
             and constraint.latency == "nRRDL"
@@ -75,40 +87,66 @@ class DDRAM_P(DDR5):
             constraint.preceding = activation_commands.copy()
             constraint.following = activation_commands.copy()
 
-        # four-activation window (nFAW)
+        # nFAW: four-activation window shared by both views
         elif (
             constraint.level == "Rank"
             and constraint.latency == "nFAW"
             and constraint.window == 4
             and constraint.shared_window
         ):
-            constraint.preceding.extend(["ACT_A", "ACT_B"])
-            constraint.following.extend(["ACT_A", "ACT_B"])
+            extend_unique(constraint.preceding, ["ACT_A", "ACT_B"])
+            extend_unique(constraint.following, ["ACT_A", "ACT_B"])
 
-        # Read-to-bank-wide-precharge
+        # ---------------------------------------------------------
+        # 2. Bank-wide precharge constraints
+        # ---------------------------------------------------------
+
+        # RD_A/B -> PREab: read-to-precharge recovery
         if (
             constraint.level == "Rank"
-            and constraint.following == ["PREab"]
             and constraint.latency == "nRTP"
+            and "PREab" in constraint.following
+            and "RD" in constraint.preceding
         ):
-            constraint.preceding.extend(["RD_A", "RD_B"])
+            extend_unique(constraint.preceding, ["RD_A", "RD_B"])
 
-        # Write-to-bank-wide-precharge
-        elif (
-            constraint.level == "Rank"
-            and constraint.following == ["PREab"]
-            and constraint.latency == "nCWL + nBL + nWR"
-        ):
-            constraint.preceding.extend(["WR_A", "WR_B"])
-
-        # ACT-to-PREab minimum active time
+        # WR_A/B -> PREab: write recovery
         if (
             constraint.level == "Rank"
-            and constraint.preceding == ["ACT"]
-            and constraint.following == ["PREab"]
-            and constraint.latency == "nRAS"
+            and constraint.latency == "nCWL + nBL + nWR"
+            and "PREab" in constraint.following
+            and "WR" in constraint.preceding
         ):
-            constraint.preceding.extend(["ACT_A", "ACT_B"])
+            extend_unique(constraint.preceding, ["WR_A", "WR_B"])
+
+        # ACT_A/B -> PREab: minimum active time
+        if (
+            constraint.level == "Rank"
+            and constraint.latency == "nRAS"
+            and "PREab" in constraint.following
+            and "ACT" in constraint.preceding
+        ):
+            extend_unique(constraint.preceding, ["ACT_A", "ACT_B"])
+
+        # ---------------------------------------------------------
+        # 3. Maintenance constraints
+        # ---------------------------------------------------------
+
+        # Maintenance -> activation
+        # e.g., REFab -> ACT_A/B (nRFC)
+        if (
+            maintenance_commands.intersection(constraint.preceding)
+            and "ACT" in constraint.following
+        ):
+            extend_unique(constraint.following, ["ACT_A", "ACT_B"])
+
+        # Activation -> maintenance
+        # e.g., ACT_A/B -> REFab (nRC)
+        if (
+            "ACT" in constraint.preceding
+            and maintenance_commands.intersection(constraint.following)
+        ):
+            extend_unique(constraint.preceding, ["ACT_A", "ACT_B"])
 
     timing_constraints += [
         TimingConstraint(

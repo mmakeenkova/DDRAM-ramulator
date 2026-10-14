@@ -71,13 +71,19 @@ class DRAMDevice {
       case BankTarget::Single:
         return visitor(get_flat_bank_id(addr_vec));
 
-      case BankTarget::All:
+      case BankTarget::All: {
+        AddrVec_t target_addr = addr_vec;
+
+        // all banks across all bank groups in the selected rank
+        target_addr[m_spec->get_level_id("BankGroup")] = -1;
+        target_addr[m_bank_level] = -1;
+
         for (int i = 0; i < static_cast<int>(m_bank_nodes.size()); ++i) {
-          if (!bank_matches(m_bank_nodes[i], addr_vec)) continue;
+          if (!bank_matches(m_bank_nodes[i], target_addr)) continue;
           if (!visitor(i)) return false;
         }
         return true;
-
+      }
       case BankTarget::SameBank: {
         const int target_bank_id = addr_vec[m_bank_level];
         AddrVec_t target_addr = addr_vec;
@@ -103,6 +109,11 @@ class DRAMDevice {
       return true;
     });
   }
+
+  AddrVec_t get_timing_addr(
+    int command,
+    const AddrVec_t& addr_vec
+  ) const;
 
  private:
   int m_num_node_extensions = 0;
