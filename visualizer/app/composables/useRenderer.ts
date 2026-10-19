@@ -10,6 +10,7 @@ import {
 } from '~/utils/traceTree';
 import { CMD_PALETTE, defaultCmdColor, hex2rgb, isWriteCommand } from '~/utils/commandColors';
 import type { RequestTypeStoredColors } from '~/utils/commandColorStorage';
+import { getEventTimingCauses, timingCauseDescription } from '~/utils/timingCauses';
 
 import StreamingWorker from '~/workers/streaming.worker.ts?worker';
 
@@ -28,6 +29,10 @@ const CMD_LABEL_MIN_PX_PER_CYCLE = 28;
 const LABEL_MIN_BAR_WIDTH_PX = 28;
 /** Avoid drawing too many text calls in one frame when the window is very dense. */
 const CMD_LABEL_MAX_VISIBLE = 600;
+/** Bound the 2D overlay cost while keeping ordinary zoom levels fully connected. */
+const TIMING_EDGE_MAX_VISIBLE = 2000;
+/** Alternating tracks keep overlapping same-lane relations distinguishable. */
+const TIMING_EDGE_TRACK_OFFSETS = [5, -5, 8, -8, 11, -11] as const;
 /** Minimum time window when jumping command/data → request (floor; actual zoom also scales with request length). */
 const NAV_ZOOM_REQ_CYCLES = 400;
 /** Extra cycles beyond ~2.5× (queue+active) when framing a request after navigation. */
@@ -340,6 +345,20 @@ export interface HitResult {
   queueDelay?: number;
   /** Index into request-view `reqData` (for GPU hover pass). */
   requestGroupIndex?: number;
+  requestId?: bigint;
+  finalCmdId?: number;
+  selectedView?: number;
+  viewCommitted?: boolean;
+  readyAt?: bigint;
+  causeEventId?: bigint;
+  constraintId?: number;
+  constraintLevel?: number;
+  isInternal?: boolean;
+}
+
+interface TimingEdgeHitRegion {
+  targetIndex: number;
+  segments: Array<[number, number, number, number]>;
 }
 
 export interface RangeSelection {
@@ -859,6 +878,7 @@ export function useRenderer(
   canvas: Ref<HTMLCanvasElement | null>,
   labelCanvas?: Ref<HTMLCanvasElement | null>,
   followLive?: Ref<boolean>,
+  selectCommand?: (hit: HitResult) => boolean,
 ) {
   const sessionStore = useSessionStore();
   const uiStore = useUIStore();
@@ -889,6 +909,8 @@ export function useRenderer(
   const cursorTime = ref<number | null>(null);
   const mouseX = ref(0);
   const mouseY = ref(0);
+  let timingEdgeHitRegions: TimingEdgeHitRegion[] = [];
+  let timingEdgeRouteSlots = new Map<string, number>();
 
   const viewState: ViewState = reactive({
     start: 0,
@@ -1104,6 +1126,15 @@ export function useRenderer(
         addr,
         bus: busType,
         duration: dur,
+        requestId: arrays.requestId[origIdx],
+        finalCmdId: arrays.finalCmdId[origIdx],
+        selectedView: arrays.selectedView[origIdx],
+        viewCommitted: arrays.viewCommitted[origIdx] !== 0,
+        readyAt: arrays.readyAt[origIdx],
+        causeEventId: arrays.causeEventId[origIdx],
+        constraintId: arrays.constraintId[origIdx],
+        constraintLevel: arrays.constraintLevel[origIdx],
+        isInternal: spec.commandMeta[cid]?.isInternal ?? false,
       };
 
       if (busType === 'data') {
@@ -1159,6 +1190,10 @@ export function useRenderer(
         duration: Math.max(0, dur - qd),
         queueDelay: qd,
         requestGroupIndex: j,
+        requestId: arrays.requestId[origIdx],
+        finalCmdId: arrays.finalCmdId[origIdx],
+        selectedView: arrays.selectedView[origIdx],
+        viewCommitted: arrays.viewCommitted[origIdx] !== 0,
       };
     }
 
@@ -1414,6 +1449,10 @@ export function useRenderer(
     cursorTime.value = null;
   }
 
+  function setCursorTime(time: number | null) {
+    cursorTime.value = time == null ? null : clampAbsoluteTime(time);
+  }
+
   function setCursorMode(enabled: boolean) {
     cursorMode.value = enabled;
   }
@@ -1451,6 +1490,8 @@ export function useRenderer(
       lo.height = el.height;
     }
     ctx.clearRect(0, 0, lo.width, lo.height);
+    timingEdgeHitRegions = [];
+    timingEdgeRouteSlots = new Map();
 
     const spec = sessionStore.spec;
     const arrays = sessionStore.arrays;
@@ -1681,6 +1722,227 @@ export function useRenderer(
       ctx.shadowBlur = 0;
     };
 
+    // Persistent relationship layer: restrained arrows for every timing edge whose
+    // dependent command is visible. Hovering either the arrow or command promotes it.
+    if (uiStore.viewMode === 'command' && cmdRelClk && cmdLaneIdx && cmdSwimlaneData && N > 0) {
+      const firstTarget = Math.max(0, bisectLeft(cmdRelClk, relStart, N));
+      const lastTarget = Math.min(N, bisectRight(cmdRelClk, relEnd, N));
+      const visibleTargetCount = lastTarget - firstTarget;
+      if (visibleTargetCount <= TIMING_EDGE_MAX_VISIBLE) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, el.width, el.height);
+        ctx.clip();
+        const routeEnds = new Map<string, number[]>();
+        for (let targetIndex = firstTarget; targetIndex < lastTarget; targetIndex++) {
+          const targetX = ((Number(arrays.clk[targetIndex]!) - viewState.start) / vw) * el.width;
+          const targetY = cmdSwimlaneData[cmdLaneIdx[targetIndex]! * 4]!;
+          const causes = getEventTimingCauses(arrays, spec, targetIndex);
+          causes.forEach((cause, causeIndex) => {
+            if (cause.sourceIndex < 0 || cause.sourceClk == null) return;
+            const sourceDuration = getCommandDuration(spec, arrays.cmdId[cause.sourceIndex]!);
+            const sourceX = ((Number(cause.sourceClk) + sourceDuration - viewState.start) / vw) * el.width;
+            const sourceY = cmdSwimlaneData![cmdLaneIdx![cause.sourceIndex]! * 4]!;
+            const sourceLane = cmdLaneIdx![cause.sourceIndex]!;
+            const targetLane = cmdLaneIdx![targetIndex]!;
+            const sameLane = sourceLane === targetLane;
+            const routeGroup = sameLane ? `lane:${targetLane}` : `cross:${sourceLane}:${targetLane}`;
+            const ends = routeEnds.get(routeGroup) ?? [];
+            const intervalStart = Math.min(sourceX, targetX);
+            const intervalEnd = Math.max(sourceX, targetX);
+            let routeSlot = ends.findIndex(end => end < intervalStart - 2);
+            if (routeSlot < 0 && ends.length < TIMING_EDGE_TRACK_OFFSETS.length) routeSlot = ends.length;
+            if (routeSlot < 0) {
+              routeSlot = ends.reduce((best, end, idx) => end < ends[best]! ? idx : best, 0);
+            }
+            ends[routeSlot] = intervalEnd;
+            routeEnds.set(routeGroup, ends);
+            timingEdgeRouteSlots.set(`${targetIndex}:${cause.constraintId}:${cause.sourceEventId}`, routeSlot);
+            const offset = (causeIndex - (causes.length - 1) / 2) * 3;
+            const trackOffset = TIMING_EDGE_TRACK_OFFSETS[routeSlot]!;
+            const trackSign = Math.sign(trackOffset);
+            const sourceEdgeY = sourceY + (sameLane ? trackSign * ROW_HEIGHT / 2 : offset);
+            const targetEdgeY = targetY + (sameLane ? trackSign * ROW_HEIGHT / 2 : offset);
+            const segments: Array<[number, number, number, number]> = [];
+
+            ctx.globalAlpha = 0.16;
+            ctx.strokeStyle = cause.color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(sourceX, sourceEdgeY);
+            if (sameLane) {
+              const trackY = targetY + trackSign * (ROW_HEIGHT / 2 + Math.abs(trackOffset));
+              ctx.lineTo(sourceX, trackY);
+              ctx.lineTo(targetX, trackY);
+              ctx.lineTo(targetX, targetEdgeY);
+              segments.push(
+                [sourceX, sourceEdgeY, sourceX, trackY],
+                [sourceX, trackY, targetX, trackY],
+                [targetX, trackY, targetX, targetEdgeY],
+              );
+            } else {
+              const controlX = sourceX + (targetX - sourceX) * 0.55;
+              const curveOffset = trackOffset;
+              const sourceControlY = sourceEdgeY + curveOffset;
+              const targetControlY = targetEdgeY + curveOffset;
+              ctx.bezierCurveTo(controlX, sourceControlY, controlX, targetControlY, targetX, targetEdgeY);
+              let prevX = sourceX;
+              let prevY = sourceEdgeY;
+              for (let step = 1; step <= 8; step++) {
+                const t = step / 8;
+                const mt = 1 - t;
+                const x = mt ** 3 * sourceX + 3 * mt ** 2 * t * controlX
+                  + 3 * mt * t ** 2 * controlX + t ** 3 * targetX;
+                const y = mt ** 3 * sourceEdgeY + 3 * mt ** 2 * t * sourceControlY
+                  + 3 * mt * t ** 2 * targetControlY + t ** 3 * targetEdgeY;
+                segments.push([prevX, prevY, x, y]);
+                prevX = x;
+                prevY = y;
+              }
+            }
+            ctx.stroke();
+
+            const angle = sameLane
+              ? -trackSign * Math.PI / 2
+              : Math.atan2(targetEdgeY - sourceEdgeY, targetX - sourceX);
+            const headLength = 4;
+            ctx.beginPath();
+            ctx.moveTo(targetX, targetEdgeY);
+            ctx.lineTo(
+              targetX - headLength * Math.cos(angle - Math.PI / 6),
+              targetEdgeY - headLength * Math.sin(angle - Math.PI / 6),
+            );
+            ctx.moveTo(targetX, targetEdgeY);
+            ctx.lineTo(
+              targetX - headLength * Math.cos(angle + Math.PI / 6),
+              targetEdgeY - headLength * Math.sin(angle + Math.PI / 6),
+            );
+            ctx.stroke();
+            timingEdgeHitRegions.push({ targetIndex, segments });
+          });
+        }
+        ctx.restore();
+      }
+    }
+
+    // Hovering a command reveals command-to-command timing arrows. The solid portion
+    // reaches readyAt; a dashed portion, when present, is scheduler/resource slack.
+    if (uiStore.viewMode === 'command' && hoveredEvent.value && hoveredEvent.value.bus !== 'request'
+      && cmdLaneIdx && cmdSwimlaneData) {
+      const targetIndex = hoveredEvent.value.index;
+      const readyAt = arrays.readyAt[targetIndex] ?? -1n;
+      if (readyAt >= 0n) {
+        const targetY = cmdSwimlaneData[cmdLaneIdx[targetIndex]! * 4]!;
+        const targetX = ((Number(arrays.clk[targetIndex]!) - viewState.start) / vw) * el.width;
+        const readyX = ((Number(readyAt) - viewState.start) / vw) * el.width;
+        const causes = getEventTimingCauses(arrays, spec, targetIndex);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, el.width, el.height);
+        ctx.clip();
+        causes.forEach((cause, causeIndex) => {
+          if (cause.sourceIndex < 0 || cause.sourceClk == null) return;
+          const sourceCmd = arrays.cmdId[cause.sourceIndex]!;
+          const sourceDuration = getCommandDuration(spec, sourceCmd);
+          const sourceStartX = ((Number(cause.sourceClk) - viewState.start) / vw) * el.width;
+          const sourceX = sourceStartX + sourceDuration * pxPerCycle;
+          const sourceY = cmdSwimlaneData![cmdLaneIdx![cause.sourceIndex]! * 4]!;
+          const sameLane = cmdLaneIdx![cause.sourceIndex] === cmdLaneIdx![targetIndex];
+          const routeSlot = timingEdgeRouteSlots.get(
+            `${targetIndex}:${cause.constraintId}:${cause.sourceEventId}`,
+          ) ?? (causeIndex % TIMING_EDGE_TRACK_OFFSETS.length);
+          const trackOffset = TIMING_EDGE_TRACK_OFFSETS[routeSlot]!;
+          const trackSign = Math.sign(trackOffset);
+          const offset = (causeIndex - (causes.length - 1) / 2) * 4;
+          const sourceBarEdgeY = sourceY + (sameLane ? trackSign * ROW_HEIGHT / 2 : offset);
+          const targetBarEdgeY = targetY + (sameLane ? trackSign * ROW_HEIGHT / 2 : offset);
+          const trackY = targetY + trackSign * (ROW_HEIGHT / 2 + Math.abs(trackOffset));
+
+          const arrowHead = (x: number, y: number, angle: number) => {
+            const length = 5;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x - length * Math.cos(angle - Math.PI / 6), y - length * Math.sin(angle - Math.PI / 6));
+            ctx.moveTo(x, y);
+            ctx.lineTo(x - length * Math.cos(angle + Math.PI / 6), y - length * Math.sin(angle + Math.PI / 6));
+            ctx.stroke();
+          };
+
+          if (readyX > sourceX) {
+            ctx.globalAlpha = 0.06;
+            ctx.fillStyle = cause.color;
+            ctx.fillRect(sourceX, targetY - ROW_HEIGHT / 2, readyX - sourceX, ROW_HEIGHT);
+          }
+
+          ctx.globalAlpha = 0.82;
+          ctx.strokeStyle = cause.color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(sourceX, sourceBarEdgeY);
+          if (sameLane) {
+            ctx.lineTo(sourceX, trackY);
+            ctx.lineTo(readyX, trackY);
+          } else {
+            const controlX = sourceX + (readyX - sourceX) * 0.55;
+            const curveOffset = trackOffset;
+            ctx.bezierCurveTo(
+              controlX, sourceBarEdgeY + curveOffset,
+              controlX, targetBarEdgeY + curveOffset,
+              readyX, targetBarEdgeY,
+            );
+          }
+          ctx.stroke();
+
+          ctx.fillStyle = cause.color;
+          ctx.beginPath();
+          ctx.arc(sourceX, sourceBarEdgeY, 2.5, 0, Math.PI * 2);
+          ctx.arc(readyX, sameLane ? trackY : targetBarEdgeY, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          const relationY = sameLane ? trackY : targetBarEdgeY;
+          if (targetX > readyX + 0.5) {
+            ctx.globalAlpha = 0.45;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(readyX, relationY);
+            ctx.lineTo(targetX, relationY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+
+          // Terminate on the dependent command itself, rather than at an abstract
+          // ready-time marker, so the causal relationship is immediately visible.
+          ctx.globalAlpha = 0.82;
+          ctx.beginPath();
+          ctx.moveTo(targetX, relationY);
+          ctx.lineTo(targetX, targetBarEdgeY);
+          ctx.stroke();
+          arrowHead(targetX, targetBarEdgeY, sameLane ? -trackSign * Math.PI / 2 : 0);
+
+          const label = timingCauseDescription(cause, arrays, spec, targetIndex);
+          if (label && Math.abs(targetX - sourceX) >= 48) {
+            ctx.globalAlpha = 0.9;
+            ctx.font = '9px ui-monospace, JetBrains Mono, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillStyle = cause.color;
+            ctx.fillText(
+              label,
+              (sourceX + targetX) / 2,
+              sameLane ? trackY - 2 : Math.min(sourceBarEdgeY, targetBarEdgeY) - 4 - causeIndex * 10,
+            );
+          }
+        });
+        ctx.restore();
+        ctx.font = '10px ui-monospace, JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+      }
+    }
+
     if (uiStore.viewMode === 'command') {
       if (cmdBusVisible && N > 0 && cmdRelClk && cmdLaneIdx && cmdSwimlaneData
         && pxPerCycle >= CMD_LABEL_MIN_PX_PER_CYCLE) {
@@ -1836,6 +2098,59 @@ export function useRenderer(
     }
   }
 
+  function hitTestTimingEdges(clientX: number, clientY: number): HitResult | null {
+    const el = canvas.value;
+    const arrays = sessionStore.arrays;
+    const spec = sessionStore.spec;
+    if (!el || !arrays || !spec || timingEdgeHitRegions.length === 0) return null;
+    const rect = el.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const thresholdSq = 36;
+    let bestTarget = -1;
+    let bestDistance = thresholdSq;
+
+    for (const region of timingEdgeHitRegions) {
+      for (const [x1, y1, x2, y2] of region.segments) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq > 0
+          ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSq))
+          : 0;
+        const qx = x1 + t * dx;
+        const qy = y1 + t * dy;
+        const distance = (px - qx) ** 2 + (py - qy) ** 2;
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          bestTarget = region.targetIndex;
+        }
+      }
+    }
+    if (bestTarget < 0) return null;
+
+    const addr: number[] = [];
+    for (let k = 0; k < arrays.addr.length; k++) addr.push(arrays.addr[k]![bestTarget]!);
+    return {
+      index: bestTarget,
+      cmdId: arrays.cmdId[bestTarget]!,
+      clk: arrays.clk[bestTarget]!,
+      typeId: arrays.typeId[bestTarget]!,
+      sourceId: arrays.sourceId[bestTarget]!,
+      addr,
+      bus: 'command',
+      duration: getCommandDuration(spec, arrays.cmdId[bestTarget]!),
+      requestId: arrays.requestId[bestTarget],
+      finalCmdId: arrays.finalCmdId[bestTarget],
+      selectedView: arrays.selectedView[bestTarget],
+      viewCommitted: arrays.viewCommitted[bestTarget] !== 0,
+      readyAt: arrays.readyAt[bestTarget],
+      causeEventId: arrays.causeEventId[bestTarget],
+      constraintId: arrays.constraintId[bestTarget],
+      constraintLevel: arrays.constraintLevel[bestTarget],
+    };
+  }
+
   function hitTest(clientX: number, clientY: number): HitResult | null {
     if (uiStore.viewMode === 'throughput') return null;
     if (uiStore.viewMode === 'request') {
@@ -1860,7 +2175,7 @@ export function useRenderer(
         )
       : null;
 
-    return cmdHit ?? dataHit;
+    return cmdHit ?? dataHit ?? hitTestTimingEdges(clientX, clientY);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────
@@ -2201,8 +2516,8 @@ export function useRenderer(
         const totalBin = new Uint32Array(tpBinCount);
         for (let i = 0; i < N; i++) {
           const b = Math.min(tpBinCount - 1, Math.floor(cmdRelClk[i]! / tpBinSize));
-          totalBin[b]!++;
           const cid = arrays.cmdId[i]!;
+          if (!spec.commandMeta[cid]?.isInternal) totalBin[b]!++;
           if (spec.commandMeta[cid]?.isAccessing) accessBin[b]!++;
         }
         tpDataUtil = new Float32Array(tpBinCount);
@@ -3021,6 +3336,11 @@ export function useRenderer(
 
         const hit = hitTest(e.clientX, e.clientY);
         if (hit) {
+          if (selectCommand?.(hit)) {
+            hoveredEvent.value = null;
+            throughputHover.value = null;
+            return;
+          }
           navigateToCounterpart(hit);
           hoveredEvent.value = null;
         }
@@ -3127,6 +3447,7 @@ export function useRenderer(
     cursorMode,
     cursorTime,
     setCursorMode,
+    setCursorTime,
     clearCursor,
     jumpCursor,
   };

@@ -12,8 +12,11 @@
 #include "ramulator/dram/commands/ACT.h"
 #include "ramulator/dram/commands/ACT_A.h"
 #include "ramulator/dram/commands/ACT_B.h"
+#include "ramulator/dram/commands/ACT_NACK.h"
 #include "ramulator/dram/commands/DDRAM_PREab.h"
 #include "ramulator/dram/commands/DDRAM_PREsb.h"
+#include "ramulator/dram/commands/IREF_A.h"
+#include "ramulator/dram/commands/IREF_B.h"
 #include "ramulator/dram/commands/PRE_A.h"
 #include "ramulator/dram/commands/PRE_B.h"
 #include "ramulator/dram/commands/PREpb.h"
@@ -38,7 +41,7 @@ class DDRAM_P : public DRAMSpec {
     enum : int { Channel, Rank, BankGroup, Bank, Row, Column, COUNT };
   };
   struct Command {
-    enum : int { ACT, PREpb, PREab, RD, WR, RDA, WRA, REFab, PREsb, REFsb, RFMab, RFMsb, ACT_A, ACT_B, PRE_A, PRE_B, RD_A, RD_B, WR_A, WR_B, COUNT };
+    enum : int { ACT, PREpb, PREab, RD, WR, RDA, WRA, REFab, PREsb, REFsb, RFMab, RFMsb, ACT_A, ACT_B, PRE_A, PRE_B, RD_A, RD_B, WR_A, WR_B, IREF_A, IREF_B, ACT_NACK, COUNT };
   };
   struct State {
     enum : int { Opened, Closed, N_A, COUNT };
@@ -54,7 +57,8 @@ class DDRAM_P : public DRAMSpec {
       Cmd::ACT<DDRAM_P>, Cmd::PREpb<DDRAM_P>, Cmd::DDRAM_PREab<DDRAM_P>, Cmd::RD<DDRAM_P>, Cmd::WR<DDRAM_P>,
       Cmd::RDA<DDRAM_P>, Cmd::WRA<DDRAM_P>, Cmd::REFab<DDRAM_P>, Cmd::DDRAM_PREsb<DDRAM_P>, Cmd::REFsb<DDRAM_P>,
       Cmd::RFMab<DDRAM_P>, Cmd::RFMsb<DDRAM_P>, Cmd::ACT_A<DDRAM_P>, Cmd::ACT_B<DDRAM_P>, Cmd::PRE_A<DDRAM_P>,
-      Cmd::PRE_B<DDRAM_P>, Cmd::RD_A<DDRAM_P>, Cmd::RD_B<DDRAM_P>, Cmd::WR_A<DDRAM_P>, Cmd::WR_B<DDRAM_P>
+      Cmd::PRE_B<DDRAM_P>, Cmd::RD_A<DDRAM_P>, Cmd::RD_B<DDRAM_P>, Cmd::WR_A<DDRAM_P>, Cmd::WR_B<DDRAM_P>,
+      Cmd::IREF_A<DDRAM_P>, Cmd::IREF_B<DDRAM_P>, Cmd::ACT_NACK<DDRAM_P>
   >;
 
   DDRAM_P(const ConfigNode& config) {
@@ -66,7 +70,7 @@ class DDRAM_P : public DRAMSpec {
 
     // String name maps + reverse lookup vectors
     set_names(levels, level_names, {"Channel", "Rank", "BankGroup", "Bank", "Row", "Column"});
-    set_names(commands, command_names, {"ACT", "PREpb", "PREab", "RD", "WR", "RDA", "WRA", "REFab", "PREsb", "REFsb", "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B", "WR_A", "WR_B"});
+    set_names(commands, command_names, {"ACT", "PREpb", "PREab", "RD", "WR", "RDA", "WRA", "REFab", "PREsb", "REFsb", "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B", "WR_A", "WR_B", "IREF_A", "IREF_B", "ACT_NACK"});
     set_names(states, state_names, {"Opened", "Closed", "N_A"});
     set_names(timings, timing_names, {
         "rate", "nBL", "nCL", "nRCD", "nRP", "nRAS", "nRC", "nWR", "nRTP", "nCWL", "nPPD", "nCCDS", "nCCDL",

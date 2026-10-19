@@ -66,6 +66,16 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
     m_cmd_buf.push_back(static_cast<uint8_t>(req.command));
     m_type_buf.push_back(static_cast<int8_t>(req.type_id));
     m_source_buf.push_back(static_cast<int16_t>(req.source_id));
+    m_event_id_buf.push_back(m_ctrl->m_device.m_last_issue_event_id);
+    m_request_id_buf.push_back(req.request_id);
+    m_final_cmd_buf.push_back(static_cast<int16_t>(req.final_command));
+    m_selected_view_buf.push_back(static_cast<int8_t>(req.selected_view));
+    m_view_committed_buf.push_back(req.view_committed ? 1 : 0);
+    const auto& cause = m_ctrl->m_device.m_last_issue_timing_cause;
+    m_ready_at_buf.push_back(cause.ready_at);
+    m_cause_event_id_buf.push_back(cause.source_event_id);
+    m_constraint_id_buf.push_back(cause.constraint_id);
+    m_constraint_level_buf.push_back(static_cast<int16_t>(cause.level));
     for (int k = 0; k < m_level_count; k++) {
       m_addr_bufs[k].push_back(static_cast<int32_t>(req.addr_vec[k]));
     }
@@ -117,6 +127,15 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
   std::vector<uint8_t> m_cmd_buf;
   std::vector<int8_t> m_type_buf;
   std::vector<int16_t> m_source_buf;
+  std::vector<int64_t> m_event_id_buf;
+  std::vector<int64_t> m_request_id_buf;
+  std::vector<int16_t> m_final_cmd_buf;
+  std::vector<int8_t> m_selected_view_buf;
+  std::vector<uint8_t> m_view_committed_buf;
+  std::vector<int64_t> m_ready_at_buf;
+  std::vector<int64_t> m_cause_event_id_buf;
+  std::vector<int32_t> m_constraint_id_buf;
+  std::vector<int16_t> m_constraint_level_buf;
   std::vector<std::vector<int32_t>> m_addr_bufs;
 
   clock::time_point m_last_flush_time;
@@ -124,13 +143,26 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
 
   // ── JSON helpers ──────────────────────────────────────────────────
 
+  static std::string json_string(const std::string& value) {
+    std::string r = "\"";
+    for (const char c : value) {
+      switch (c) {
+        case '\\': r += "\\\\"; break;
+        case '"': r += "\\\""; break;
+        case '\n': r += "\\n"; break;
+        case '\r': r += "\\r"; break;
+        case '\t': r += "\\t"; break;
+        default: r += c; break;
+      }
+    }
+    return r + '"';
+  }
+
   static std::string json_str_array(const std::vector<std::string>& v) {
     std::string r = "[";
     for (size_t i = 0; i < v.size(); i++) {
       if (i) r += ',';
-      r += '"';
-      r += v[i];
-      r += '"';
+      r += json_string(v[i]);
     }
     return r + ']';
   }
@@ -150,10 +182,24 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
       if (i) r += ',';
       const auto& m = meta[i];
       r += fmt::format(
-          R"({{"isOpening":{},"isClosing":{},"isAccessing":{},"isRefreshing":{},"isRowCommand":{},"isColumnCommand":{}}})",
+          R"({{"isOpening":{},"isClosing":{},"isAccessing":{},"isRefreshing":{},"isRowCommand":{},"isColumnCommand":{},"isInternal":{}}})",
           m.is_opening ? "true" : "false", m.is_closing ? "true" : "false",
           m.is_accessing ? "true" : "false", m.is_refreshing ? "true" : "false",
-          m.is_row_command ? "true" : "false", m.is_column_command ? "true" : "false");
+          m.is_row_command ? "true" : "false", m.is_column_command ? "true" : "false",
+          m.is_internal ? "true" : "false");
+    }
+    return r + ']';
+  }
+
+  static std::string json_timing_constraints(const std::vector<TimingConstraintInfo>& constraints) {
+    std::string r = "[";
+    for (size_t i = 0; i < constraints.size(); i++) {
+      if (i) r += ',';
+      const auto& c = constraints[i];
+      r += fmt::format(
+          R"({{"label":{},"level":{},"preceding":{},"following":{},"value":{},"window":{},"sibling":{},"historyGroup":{}}})",
+          json_string(c.label), c.level, c.preceding, c.following, c.value, c.window,
+          c.sibling ? "true" : "false", c.history_group);
     }
     return r + ']';
   }
@@ -163,20 +209,21 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
   void send_init(const DRAMSpec& spec) {
     auto body = fmt::format(
         R"({{"type":"init",)"
-        R"("header":{{"version":[1,1],)"
+        R"("header":{{"version":[1,2],)"
         R"("levelCount":{},"commandCount":{},"timingCount":{},)"
         R"("channelWidth":{},"prefetchSize":{},"dq":{},)"
         R"("channelId":{},"readLatency":{},"dramType":"{}"}},)"
         R"("spec":{{"levelNames":{},"levelSizes":{},)"
         R"("commandNames":{},"commandMeta":{},"commandCycles":{},)"
-        R"("timingNames":{},"timingValues":{}}}}})",
+        R"("timingNames":{},"timingValues":{},"timingConstraints":{}}}}})",
         spec.level_count, spec.command_count, spec.timing_count,
         spec.channel_width, spec.internal_prefetch_size, spec.organization.dq,
         m_ctrl->m_channel_id, spec.read_latency, m_dram_type,
         json_str_array(spec.level_names), json_int_array(spec.organization.level_sizes),
         json_str_array(spec.command_names), json_cmd_meta(spec.command_meta),
         json_int_array(spec.command_cycles),
-        json_str_array(spec.timing_names), json_int_array(spec.timing_vals));
+        json_str_array(spec.timing_names), json_int_array(spec.timing_vals),
+        json_timing_constraints(spec.timing_constraint_info));
     http_post(body);
   }
 
@@ -190,8 +237,13 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
     for (size_t i = 0; i < n; i++) {
       if (i) events += ',';
       events += fmt::format(
-          R"({{"clk":{},"arrive":{},"cmdId":{},"typeId":{},"sourceId":{},"addr":[)",
-          m_clk_buf[i], m_arrive_buf[i], m_cmd_buf[i], m_type_buf[i], m_source_buf[i]);
+          R"({{"clk":{},"arrive":{},"cmdId":{},"typeId":{},"sourceId":{},)"
+          R"("eventId":{},"requestId":{},"finalCmdId":{},"selectedView":{},"viewCommitted":{},)"
+          R"("readyAt":{},"causeEventId":{},"constraintId":{},"constraintLevel":{},"addr":[)",
+          m_clk_buf[i], m_arrive_buf[i], m_cmd_buf[i], m_type_buf[i], m_source_buf[i],
+          m_event_id_buf[i], m_request_id_buf[i], m_final_cmd_buf[i], m_selected_view_buf[i],
+          m_view_committed_buf[i] ? "true" : "false", m_ready_at_buf[i], m_cause_event_id_buf[i],
+          m_constraint_id_buf[i], m_constraint_level_buf[i]);
       for (int k = 0; k < m_level_count; k++) {
         if (k) events += ',';
         events += std::to_string(m_addr_bufs[k][i]);
@@ -211,6 +263,15 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
     m_cmd_buf.clear();
     m_type_buf.clear();
     m_source_buf.clear();
+    m_event_id_buf.clear();
+    m_request_id_buf.clear();
+    m_final_cmd_buf.clear();
+    m_selected_view_buf.clear();
+    m_view_committed_buf.clear();
+    m_ready_at_buf.clear();
+    m_cause_event_id_buf.clear();
+    m_constraint_id_buf.clear();
+    m_constraint_level_buf.clear();
     for (auto& buf : m_addr_bufs) buf.clear();
   }
 

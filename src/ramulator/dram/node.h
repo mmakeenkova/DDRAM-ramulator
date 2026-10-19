@@ -13,6 +13,13 @@
 
 namespace Ramulator {
 
+struct TimingCause {
+  Clk_t ready_at = -1;
+  int64_t source_event_id = -1;
+  int constraint_id = -1;
+  int level = -1;
+};
+
 /**
  * @brief     Feature-owned state attached to a DRAM node (e.g., a power model's per-bank counters).
  *
@@ -44,8 +51,12 @@ struct DRAMNode {
   int m_state = -1;  // The state of the node
 
   std::vector<Clk_t> m_cmd_ready_clk;            // The next cycle that each command can be issued again at this level
+  std::vector<TimingCause> m_cmd_ready_cause;     // Constraint responsible for m_cmd_ready_clk
+  std::vector<std::vector<TimingCause>> m_cmd_ready_causes;  // All constraints tied for the latest ready clock
   std::vector<std::deque<Clk_t>> m_cmd_history;  // Issue-history of each command at this level
+  std::vector<std::deque<int64_t>> m_cmd_history_events;
   std::vector<std::deque<Clk_t>> m_shared_window_history;  // Shared rolling-window histories
+  std::vector<std::deque<int64_t>> m_shared_window_history_events;
 
   std::unordered_map<int, int> m_row_state;  // The state of the rows, if I am a bank-ish node
 
@@ -56,8 +67,10 @@ struct DRAMNode {
 
   DRAMNode(DRAMSpec* spec, DRAMNode* parent, int level, int id);
 
-  void update_timing(int command, const AddrVec_t& addr_vec, Clk_t clk);
+  void update_timing(int command, const AddrVec_t& addr_vec, Clk_t clk, int64_t event_id = -1);
   bool check_timing(int command, const AddrVec_t& addr_vec, Clk_t clk);
+  TimingCause get_timing_cause(int command, const AddrVec_t& addr_vec) const;
+  std::vector<TimingCause> get_timing_causes(int command, const AddrVec_t& addr_vec) const;
 
   // Generic level traversal — visit all descendants at target_level
   template <typename Func>

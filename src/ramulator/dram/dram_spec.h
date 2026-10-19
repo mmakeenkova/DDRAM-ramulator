@@ -39,6 +39,7 @@ struct DRAMCommandMeta {
   bool is_refreshing = false;
   bool is_row_command = false;     // Row bus (HBM/HBM2: ACT, PREpb, PREab, REFab, REFpb)
   bool is_column_command = false;  // Column bus (HBM/HBM2: RD, WR, RDA, WRA)
+  bool is_internal = false;        // Device event; does not occupy an external command bus
 };
 
 // Timing Constraint
@@ -53,13 +54,28 @@ struct TimingConsEntry {
   bool sibling = false;
   /// Shared command-history group for shared rolling-window constraints.
   int history_group = -1;
+  /// Stable index into DRAMSpec::timing_constraint_info for diagnostics.
+  int constraint_id = -1;
 
-  TimingConsEntry(int cmd, int val, int window = 1, bool sibling = false, int history_group = -1)
-      : cmd(cmd), val(val), window(window), sibling(sibling), history_group(history_group) {
+  TimingConsEntry(int cmd, int val, int window = 1, bool sibling = false,
+                  int history_group = -1, int constraint_id = -1)
+      : cmd(cmd), val(val), window(window), sibling(sibling),
+        history_group(history_group), constraint_id(constraint_id) {
     if (this->window < 0) {
       throw std::runtime_error("TimingConsEntry: window value < 0");
     }
   };
+};
+
+struct TimingConstraintInfo {
+  int level = -1;
+  int preceding = -1;
+  int following = -1;
+  int value = 0;
+  int window = 1;
+  bool sibling = false;
+  int history_group = -1;
+  std::string label;
 };
 
 using TimingCons = std::vector<std::vector<std::vector<TimingConsEntry>>>;
@@ -103,6 +119,7 @@ struct DRAMSpec {
   std::vector<int> timing_vals;         // per timing parameter
   std::vector<int> command_cycles;      // per command: CA bus cycles (ticks)
   TimingCons timing_cons;                // per level x command
+  std::vector<TimingConstraintInfo> timing_constraint_info;
   std::vector<std::vector<int8_t>> has_sibling_cons;  // [level][cmd] → has sibling timing constraint
   std::vector<DRAMCommandMeta> command_meta;
   std::vector<BankTarget> bank_targets;

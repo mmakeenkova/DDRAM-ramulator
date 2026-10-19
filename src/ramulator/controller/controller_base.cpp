@@ -133,6 +133,7 @@ void ControllerBase::init_base() {
 
   // Optional plugin list — empty if not configured
   RAMULATOR_CREATE_OPTIONAL_CHILD_LIST(m_plugins, IControllerPlugin);
+
 }
 
 // ── Shared stats registration ───────────────────────────────────────────
@@ -169,6 +170,8 @@ void ControllerBase::setup_base(IFrontEnd* frontend, IMemorySystem* memory_syste
   m_stats.add("num_maintenance_reqs_served", s_num_maintenance_reqs_served);
   m_stats.add("num_read_reqs_forwarded", s_num_read_reqs_forwarded);
   m_stats.add("num_write_reqs_coalesced", s_num_write_reqs_coalesced);
+  m_stats.add("num_internal_refreshes", s_num_internal_refreshes);
+  m_stats.add("num_act_nacks", s_num_act_nacks);
   m_stats.add("queue_len", s_queue_len);
   m_stats.add("read_queue_len", s_read_queue_len);
   m_stats.add("write_queue_len", s_write_queue_len);
@@ -189,6 +192,7 @@ void ControllerBase::setup_base(IFrontEnd* frontend, IMemorySystem* memory_syste
 // ── IController overrides ───────────────────────────────────────────────
 
 bool ControllerBase::send(Request& req) {
+  if (req.request_id < 0) req.request_id = m_next_request_id++;
   // Address mapping: addr mapper populates addr_vec from intra_channel_addr.
   // PassThroughAddrMapper is a no-op (addr_vec already set by frontend).
   m_addr_mapper->apply(req);
@@ -249,6 +253,7 @@ bool ControllerBase::send(Request& req) {
 }
 
 bool ControllerBase::priority_send(Request& req) {
+  if (req.request_id < 0) req.request_id = m_next_request_id++;
   if (req.final_command < 0 || req.final_command >= m_device.m_spec->command_count) {
     throw std::runtime_error(fmt::format(
         "Invalid priority request final_command {}: expected a DRAM command id in [0, {})",
@@ -329,7 +334,12 @@ ControllerBase::Candidate ControllerBase::pick_best_ready_from(
   Candidate c;
   // Scheduler contract: get_best_request() derives req.command before applying
   // filter, so predicates can inspect the current command directly.
-  auto it = m_scheduler->get_best_request(buffer, filter);
+  auto eligible = [&](const Request& req) {
+    if (req.retry_after > m_clk) return false;
+    if (!m_device.managed_refresh_oracle_allows(req.command, req.addr_vec)) return false;
+    return !filter || filter(req);
+  };
+  auto it = m_scheduler->get_best_request(buffer, eligible);
   if (it == buffer.end()) {
     return c;
   }
@@ -350,6 +360,10 @@ ControllerBase::Candidate ControllerBase::pick_priority_if(RequestFilterRef filt
 
   auto it = m_priority_buffer.begin();
   if (!prepare_request(*it)) {
+    return c;
+  }
+  if (it->retry_after > m_clk ||
+      !m_device.managed_refresh_oracle_allows(it->command, it->addr_vec)) {
     return c;
   }
   if (!check_timing(it->command, it->addr_vec)) {

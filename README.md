@@ -773,6 +773,34 @@ active requests in all targeted views. View placement and reservations remain
 in the view-selection policy. For conventional DDR5 and `AlwaysA`, this scheduler
 preserves `FRFCFSRowHit` behavior.
 
+DDRAM-P can alternatively model fully DRAM-managed, row-granular refresh. It
+must be paired with `NoRefresh`, because no refresh requests are placed in the
+controller priority queue:
+
+```python
+controller = ramulator.controller.GenericDDR(
+    dram=dram,
+    scheduler=ramulator.scheduler.FRFCFSViewAware(),
+    refresh_manager=ramulator.refresh_manager.NoRefresh(),
+    row_policy=ramulator.row_policy.Open(),
+    addr_mapper=ramulator.addr_mapper.RoBaRaCoCh(),
+    dram_managed_refresh="Oracle",  # or "Nack"
+    dram_refresh_rows_per_region=4,
+    dram_refresh_granularity=1,
+)
+```
+
+The Oracle interface makes locked regions unavailable during scheduling. The
+Nack interface instead emits `ACT_NACK`, leaves device state unchanged, and
+retries after `dram_refresh_nack_latency + dram_refresh_ari` cycles. `IREF_A`
+and `IREF_B` identify internal refresh work in command traces. Interval and
+duration default to `nREFI` and `nRFCsb`; experiments can override them with
+`dram_refresh_interval` and `dram_refresh_duration`. Refresh never starts in a
+region containing an open row. If both views remain open under the Open policy,
+the device relinquishes a timing-safe view once its ACT-to-access sequence has
+finished, preventing refresh starvation. One full ARI opportunity separates
+lock release from reacquisition.
+
 For routine DDRAM-P development, use the focused suite:
 
 ```bash
@@ -1671,11 +1699,49 @@ Add a `BinTraceRecorder` plugin to your controller to record a binary trace:
 
 ```python
 controller_plugins=[
-    ramulator.controller_plugin.BinTraceRecorder(path="my_trace"),
+    ramulator.controller_plugin.BinTraceRecorder(
+        path="my_trace",
+        record_equal_constraints=True,  # optional RAM2BIN 1.3 diagnostics
+    ),
 ]
 ```
 
 This produces one `.ram2bin` file per channel (e.g. `my_trace.ch0.ram2bin`). Open the visualizer in your browser and drag-and-drop the file onto the upload area.
+
+To compare two traces, open a trace normally and click **Compare**, or navigate to
+`/compare`. Load one `.ram2bin` file into each half of the window. **Sync
+navigation** keeps pan and zoom matched, while **Linked cursor** mirrors the
+cursor between traces. Both options can be disabled for independent inspection.
+The divider between the panels is draggable.
+
+When equivalent work occurs at different absolute cycles, click **Align
+commands**, then select one corresponding command in each trace. Those command
+cycles become the shared relative origin: they are centered together, and later
+synchronized navigation and cursor movement preserve that offset. **Realign**
+chooses a new pair; **Clear** returns to absolute-cycle synchronization. Each
+panel is an isolated instance of the existing trace view, so command, request,
+throughput, timing-arrow, and conventional DDR behavior remain unchanged.
+
+RAM2BIN 1.2 traces add diagnostic metadata without changing the original event-array prefix. The command tooltip shows the stable request ID, final command, DDRAM-P view assignment and whether it was committed. It also reports the earliest legal issue cycle and the command/timing constraint responsible for that limit. Set `record_equal_constraints=True` to emit RAM2BIN 1.3 and retain every constraint tied at that strictest cycle. The visualizer draws those causes as subtle command-to-command arrows by default; hovering an arrow or command expands it with readable command names, the exact timing label, and its cycle value. The **Bottlenecks** popover summarizes the same constraints across the trace. The option defaults to false to limit trace size. Ordinary DDR traces use the same format; their view fields remain unset, so the visualizer behaves as before. Existing RAM2BIN 1.0 and 1.1 files are still accepted.
+
+For regression tests and analysis scripts, the same information is available without the browser:
+
+```python
+from ramulator.trace import Trace
+
+trace = Trace.open("my_trace.ch0.ram2bin")
+bank_one_view_a = list(trace.commands(bank=1, view="A"))
+trace.assert_sequence(["ACT_A", "RD_A"], bank_one_view_a)
+
+source, constraint = trace.timing_cause(bank_one_view_a[1])
+trace.assert_timing_edge(source, bank_one_view_a[1], constraint.label)
+```
+
+The `view` filter is optional and therefore works unchanged for conventional DDR. `request_chain()` groups all prerequisites and the final command using the recorder's stable request ID.
+
+A runnable DDRAM-P recording example, including optional MORDOR CPU-trace
+input, is available in
+[`experiments/ddram_p_visualizer`](experiments/ddram_p_visualizer/README.md).
 
 ### 10.4 Live Streaming
 

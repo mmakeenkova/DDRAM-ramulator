@@ -32,6 +32,15 @@ interface StreamEvent {
   typeId: number;
   sourceId: number;
   addr: number[];
+  eventId?: number;
+  requestId?: number;
+  finalCmdId?: number;
+  selectedView?: number;
+  viewCommitted?: boolean;
+  readyAt?: number;
+  causeEventId?: number;
+  constraintId?: number;
+  constraintLevel?: number;
 }
 
 interface StreamHeader {
@@ -55,6 +64,7 @@ interface StreamSpec {
   commandCycles?: number[];
   timingNames: string[];
   timingValues: number[];
+  timingConstraints?: TraceSpec['timingConstraints'];
 }
 
 // ── Incremental typed-array state ────────────────────────────────────────────
@@ -67,6 +77,15 @@ let _arriveBuf = new BigInt64Array(0);
 let _cmdIdBuf = new Uint8Array(0);
 let _typeIdBuf = new Int8Array(0);
 let _sourceIdBuf = new Int16Array(0);
+let _eventIdBuf = new BigInt64Array(0);
+let _requestIdBuf = new BigInt64Array(0);
+let _finalCmdIdBuf = new Int16Array(0);
+let _selectedViewBuf = new Int8Array(0);
+let _viewCommittedBuf = new Uint8Array(0);
+let _readyAtBuf = new BigInt64Array(0);
+let _causeEventIdBuf = new BigInt64Array(0);
+let _constraintIdBuf = new Int32Array(0);
+let _constraintLevelBuf = new Int16Array(0);
 let _addrBufs: Int32Array[] = [];
 
 /** Cached TraceSpec (does not change during a session). */
@@ -82,6 +101,15 @@ function _growBuffers(minCapacity: number) {
   const newCmdId = new Uint8Array(cap);
   const newTypeId = new Int8Array(cap);
   const newSourceId = new Int16Array(cap);
+  const newEventId = new BigInt64Array(cap);
+  const newRequestId = new BigInt64Array(cap); newRequestId.fill(-1n);
+  const newFinalCmdId = new Int16Array(cap); newFinalCmdId.fill(-1);
+  const newSelectedView = new Int8Array(cap); newSelectedView.fill(-1);
+  const newViewCommitted = new Uint8Array(cap);
+  const newReadyAt = new BigInt64Array(cap); newReadyAt.fill(-1n);
+  const newCauseEventId = new BigInt64Array(cap); newCauseEventId.fill(-1n);
+  const newConstraintId = new Int32Array(cap); newConstraintId.fill(-1);
+  const newConstraintLevel = new Int16Array(cap); newConstraintLevel.fill(-1);
 
   if (_count > 0) {
     newClk.set(_clkBuf.subarray(0, _count));
@@ -89,6 +117,15 @@ function _growBuffers(minCapacity: number) {
     newCmdId.set(_cmdIdBuf.subarray(0, _count));
     newTypeId.set(_typeIdBuf.subarray(0, _count));
     newSourceId.set(_sourceIdBuf.subarray(0, _count));
+    newEventId.set(_eventIdBuf.subarray(0, _count));
+    newRequestId.set(_requestIdBuf.subarray(0, _count));
+    newFinalCmdId.set(_finalCmdIdBuf.subarray(0, _count));
+    newSelectedView.set(_selectedViewBuf.subarray(0, _count));
+    newViewCommitted.set(_viewCommittedBuf.subarray(0, _count));
+    newReadyAt.set(_readyAtBuf.subarray(0, _count));
+    newCauseEventId.set(_causeEventIdBuf.subarray(0, _count));
+    newConstraintId.set(_constraintIdBuf.subarray(0, _count));
+    newConstraintLevel.set(_constraintLevelBuf.subarray(0, _count));
     for (let k = 0; k < _levelCount; k++) {
       const newAddr = new Int32Array(cap);
       newAddr.set(_addrBufs[k]!.subarray(0, _count));
@@ -103,6 +140,15 @@ function _growBuffers(minCapacity: number) {
   _cmdIdBuf = newCmdId;
   _typeIdBuf = newTypeId;
   _sourceIdBuf = newSourceId;
+  _eventIdBuf = newEventId;
+  _requestIdBuf = newRequestId;
+  _finalCmdIdBuf = newFinalCmdId;
+  _selectedViewBuf = newSelectedView;
+  _viewCommittedBuf = newViewCommitted;
+  _readyAtBuf = newReadyAt;
+  _causeEventIdBuf = newCauseEventId;
+  _constraintIdBuf = newConstraintId;
+  _constraintLevelBuf = newConstraintLevel;
   _capacity = cap;
 }
 
@@ -115,6 +161,15 @@ function _resetBuffers(levelCount: number) {
   _cmdIdBuf = new Uint8Array(0);
   _typeIdBuf = new Int8Array(0);
   _sourceIdBuf = new Int16Array(0);
+  _eventIdBuf = new BigInt64Array(0);
+  _requestIdBuf = new BigInt64Array(0);
+  _finalCmdIdBuf = new Int16Array(0);
+  _selectedViewBuf = new Int8Array(0);
+  _viewCommittedBuf = new Uint8Array(0);
+  _readyAtBuf = new BigInt64Array(0);
+  _causeEventIdBuf = new BigInt64Array(0);
+  _constraintIdBuf = new Int32Array(0);
+  _constraintLevelBuf = new Int16Array(0);
   _addrBufs = Array.from({ length: levelCount }, () => new Int32Array(0));
   _cachedSpec = null;
 }
@@ -131,6 +186,15 @@ function _appendEvents(events: StreamEvent[]) {
     _cmdIdBuf[j] = e.cmdId;
     _typeIdBuf[j] = e.typeId;
     _sourceIdBuf[j] = e.sourceId;
+    _eventIdBuf[j] = BigInt(e.eventId ?? j);
+    _requestIdBuf[j] = BigInt(e.requestId ?? -1);
+    _finalCmdIdBuf[j] = e.finalCmdId ?? -1;
+    _selectedViewBuf[j] = e.selectedView ?? -1;
+    _viewCommittedBuf[j] = e.viewCommitted ? 1 : 0;
+    _readyAtBuf[j] = BigInt(e.readyAt ?? -1);
+    _causeEventIdBuf[j] = BigInt(e.causeEventId ?? -1);
+    _constraintIdBuf[j] = e.constraintId ?? -1;
+    _constraintLevelBuf[j] = e.constraintLevel ?? -1;
     for (let k = 0; k < _levelCount; k++) {
       _addrBufs[k]![j] = e.addr[k] ?? 0;
     }
@@ -152,6 +216,7 @@ function _buildTrace(header: StreamHeader, spec: StreamSpec, copyArrays = false)
       commandCycles: new Uint8Array(spec.commandCycles ?? Array(spec.commandNames.length).fill(1)),
       timingNames: spec.timingNames,
       timingValues: new Int32Array(spec.timingValues),
+      timingConstraints: spec.timingConstraints ?? [],
     };
   }
 
@@ -173,6 +238,19 @@ function _buildTrace(header: StreamHeader, spec: StreamSpec, copyArrays = false)
     typeId: copyArrays ? new Int8Array(typeId) : typeId,
     sourceId: copyArrays ? new Int16Array(sourceId) : sourceId,
     addr: copyArrays ? addr.map(a => new Int32Array(a)) : addr,
+    eventId: copyArrays ? new BigInt64Array(_eventIdBuf.subarray(0, N)) : _eventIdBuf.subarray(0, N),
+    requestId: copyArrays ? new BigInt64Array(_requestIdBuf.subarray(0, N)) : _requestIdBuf.subarray(0, N),
+    finalCmdId: copyArrays ? new Int16Array(_finalCmdIdBuf.subarray(0, N)) : _finalCmdIdBuf.subarray(0, N),
+    selectedView: copyArrays ? new Int8Array(_selectedViewBuf.subarray(0, N)) : _selectedViewBuf.subarray(0, N),
+    viewCommitted: copyArrays ? new Uint8Array(_viewCommittedBuf.subarray(0, N)) : _viewCommittedBuf.subarray(0, N),
+    readyAt: copyArrays ? new BigInt64Array(_readyAtBuf.subarray(0, N)) : _readyAtBuf.subarray(0, N),
+    causeEventId: copyArrays ? new BigInt64Array(_causeEventIdBuf.subarray(0, N)) : _causeEventIdBuf.subarray(0, N),
+    constraintId: copyArrays ? new Int32Array(_constraintIdBuf.subarray(0, N)) : _constraintIdBuf.subarray(0, N),
+    constraintLevel: copyArrays ? new Int16Array(_constraintLevelBuf.subarray(0, N)) : _constraintLevelBuf.subarray(0, N),
+    tieOffsets: new BigUint64Array(N + 1),
+    tieSourceEventId: new BigInt64Array(0),
+    tieConstraintId: new Int32Array(0),
+    tieConstraintLevel: new Int16Array(0),
   };
 
   const traceHeader: TraceHeader = { ...header, numEntries: N, dataOffset: 0 };

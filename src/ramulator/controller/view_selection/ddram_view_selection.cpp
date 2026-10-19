@@ -111,6 +111,9 @@ class DDRAMViewSelection final : public DDRAMViewSelectionBase {
       // A physical row hit must use that view, even if the other view is free.
       for (int view = 0; view < 2; ++view) {
         if (DDRAM::row_hit(bank, view, row)) {
+          if (m_device.is_view_refresh_busy(bank_id, view)) {
+            return false;
+          }
           if (reserved[view] != DDRAM::CLOSED) {
             return false;
           }
@@ -120,13 +123,25 @@ class DDRAMViewSelection final : public DDRAMViewSelectionBase {
       }
       // Prefer closed, unreserved views; then use A-first victim selection.
       for (int view = 0; view < 2 && req.selected_view == -1; ++view) {
-        if (reserved[view] == DDRAM::CLOSED && !DDRAM::view_open(bank, view)) {
+        if (reserved[view] == DDRAM::CLOSED && !DDRAM::view_open(bank, view) &&
+            !m_device.is_view_refresh_busy(bank_id, view) && view != req.nacked_view) {
           req.selected_view = view;
         }
       }
       for (int view = 0; view < 2 && req.selected_view == -1; ++view) {
-        if (reserved[view] == DDRAM::CLOSED) {
+        if (reserved[view] == DDRAM::CLOSED && !m_device.is_view_refresh_busy(bank_id, view) &&
+            view != req.nacked_view) {
           req.selected_view = view;
+        }
+      }
+      // Both paths may have been tried across successive NACKs.  Forget the
+      // older hint rather than making the request permanently ineligible.
+      if (req.selected_view == -1 && req.nacked_view >= 0) {
+        req.nacked_view = -1;
+        for (int view = 0; view < 2 && req.selected_view == -1; ++view) {
+          if (reserved[view] == DDRAM::CLOSED && !m_device.is_view_refresh_busy(bank_id, view)) {
+            req.selected_view = view;
+          }
         }
       }
       if (req.selected_view == -1) {

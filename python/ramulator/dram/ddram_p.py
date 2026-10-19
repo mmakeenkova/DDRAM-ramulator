@@ -29,7 +29,11 @@ class DDRAM_P(DDR5):
         "PRE_A", "PRE_B",
         "RD_A", "RD_B",
         "WR_A", "WR_B",
+        # Device-internal, row-granular refresh events.  These are observable
+        # in command traces but never travel over the external command bus.
+        "IREF_A", "IREF_B", "ACT_NACK",
     ]
+    internal_commands = ["IREF_A", "IREF_B", "ACT_NACK"]
 
     # values inherited from "normal" ACT, RD, WR
     command_cycles = {
@@ -40,6 +44,9 @@ class DDRAM_P(DDR5):
         "RD_B": 2,
         "WR_A": 2,
         "WR_B": 2,
+        "IREF_A": 1,
+        "IREF_B": 1,
+        "ACT_NACK": 1,
     }
 
     # PREab and PREsb close both views in all banks/the bank 

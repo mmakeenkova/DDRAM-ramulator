@@ -23,6 +23,7 @@ export interface CommandMeta {
   isRefreshing: boolean;
   isRowCommand: boolean;
   isColumnCommand: boolean;
+  isInternal: boolean;
 }
 
 export interface TraceSpec {
@@ -33,6 +34,18 @@ export interface TraceSpec {
   commandCycles: Uint8Array;
   timingNames: string[];
   timingValues: Int32Array;
+  timingConstraints: TimingConstraintInfo[];
+}
+
+export interface TimingConstraintInfo {
+  label: string;
+  level: number;
+  preceding: number;
+  following: number;
+  value: number;
+  window: number;
+  sibling: boolean;
+  historyGroup: number;
 }
 
 export interface TraceArrays {
@@ -42,6 +55,20 @@ export interface TraceArrays {
   typeId: Int8Array;
   sourceId: Int16Array;
   addr: Int32Array[];
+  eventId: BigInt64Array;
+  requestId: BigInt64Array;
+  finalCmdId: Int16Array;
+  selectedView: Int8Array;
+  viewCommitted: Uint8Array;
+  readyAt: BigInt64Array;
+  causeEventId: BigInt64Array;
+  constraintId: Int32Array;
+  constraintLevel: Int16Array;
+  /** CSR offsets into the tied-cause arrays; length is event count + 1. */
+  tieOffsets: BigUint64Array;
+  tieSourceEventId: BigInt64Array;
+  tieConstraintId: Int32Array;
+  tieConstraintLevel: Int16Array;
 }
 
 export interface ParsedTrace {
@@ -120,6 +147,7 @@ function parseSpec(buf: ArrayBuffer, header: TraceHeader): TraceSpec {
       isRefreshing:    !!(bits & (1 << 3)),
       isRowCommand:    !!(bits & (1 << 4)),
       isColumnCommand: !!(bits & (1 << 5)),
+      isInternal:      !!(bits & (1 << 6)),
     });
   }
   offset += header.commandCount;
@@ -141,8 +169,29 @@ function parseSpec(buf: ArrayBuffer, header: TraceHeader): TraceSpec {
   const timingValues = new Int32Array(header.timingCount);
   for (let i = 0; i < header.timingCount; i++)
     timingValues[i] = view.getInt32(offset + i * 4, true);
+  offset += header.timingCount * 4;
 
-  return { levelNames, levelSizes, commandNames, commandMeta, commandCycles, timingNames, timingValues };
+  const timingConstraints: TimingConstraintInfo[] = [];
+  const hasDiagnostics = header.version[0] > 1 || (header.version[0] === 1 && header.version[1] >= 2);
+  if (hasDiagnostics && offset + 4 <= header.dataOffset) {
+    const count = view.getUint32(offset, true);
+    offset += 4;
+    for (let i = 0; i < count; i++) {
+      const parsed = readNullTerminatedStrings(view, offset, 1);
+      const label = parsed.strings[0] ?? '';
+      offset += parsed.bytesRead;
+      const level = view.getInt16(offset, true); offset += 2;
+      const preceding = view.getInt16(offset, true); offset += 2;
+      const following = view.getInt16(offset, true); offset += 2;
+      const value = view.getInt32(offset, true); offset += 4;
+      const window = view.getInt16(offset, true); offset += 2;
+      const sibling = view.getUint8(offset) !== 0; offset += 1;
+      const historyGroup = view.getInt16(offset, true); offset += 2;
+      timingConstraints.push({ label, level, preceding, following, value, window, sibling, historyGroup });
+    }
+  }
+
+  return { levelNames, levelSizes, commandNames, commandMeta, commandCycles, timingNames, timingValues, timingConstraints };
 }
 
 function parseArrays(buf: ArrayBuffer, header: TraceHeader): TraceArrays {
@@ -161,7 +210,63 @@ function parseArrays(buf: ArrayBuffer, header: TraceHeader): TraceArrays {
     addr.push(new Int32Array(buf, D + (20 + 4 * k) * N, N));
   }
 
-  return { clk, arrive, cmdId, typeId, sourceId, addr };
+  const eventId = new BigInt64Array(N);
+  const requestId = new BigInt64Array(N);
+  const finalCmdId = new Int16Array(N); finalCmdId.fill(-1);
+  const selectedView = new Int8Array(N); selectedView.fill(-1);
+  const viewCommitted = new Uint8Array(N);
+  const readyAt = new BigInt64Array(N); readyAt.fill(-1n);
+  const causeEventId = new BigInt64Array(N); causeEventId.fill(-1n);
+  const constraintId = new Int32Array(N); constraintId.fill(-1);
+  const constraintLevel = new Int16Array(N); constraintLevel.fill(-1);
+  let tieOffsets = new BigUint64Array(N + 1);
+  let tieSourceEventId = new BigInt64Array(0);
+  let tieConstraintId = new Int32Array(0);
+  let tieConstraintLevel = new Int16Array(0);
+
+  const hasDiagnostics = header.version[0] > 1 || (header.version[0] === 1 && header.version[1] >= 2);
+  if (hasDiagnostics) {
+    const view = new DataView(buf);
+    let offset = D + (20 + 4 * L) * N;
+    const readI64 = (out: BigInt64Array) => {
+      for (let i = 0; i < N; i++) out[i] = view.getBigInt64(offset + i * 8, true);
+      offset += N * 8;
+    };
+    readI64(eventId);
+    readI64(requestId);
+    for (let i = 0; i < N; i++) finalCmdId[i] = view.getInt16(offset + i * 2, true);
+    offset += N * 2;
+    for (let i = 0; i < N; i++) selectedView[i] = view.getInt8(offset + i);
+    offset += N;
+    for (let i = 0; i < N; i++) viewCommitted[i] = view.getUint8(offset + i);
+    offset += N;
+    readI64(readyAt);
+    readI64(causeEventId);
+    for (let i = 0; i < N; i++) constraintId[i] = view.getInt32(offset + i * 4, true);
+    offset += N * 4;
+    for (let i = 0; i < N; i++) constraintLevel[i] = view.getInt16(offset + i * 2, true);
+    offset += N * 2;
+    const hasTies = header.version[0] > 1 || (header.version[0] === 1 && header.version[1] >= 3);
+    if (hasTies) {
+      for (let i = 0; i <= N; i++) tieOffsets[i] = view.getBigUint64(offset + i * 8, true);
+      offset += (N + 1) * 8;
+      const tieCount = Number(tieOffsets[N]);
+      tieSourceEventId = new BigInt64Array(tieCount);
+      tieConstraintId = new Int32Array(tieCount);
+      tieConstraintLevel = new Int16Array(tieCount);
+      for (let i = 0; i < tieCount; i++) tieSourceEventId[i] = view.getBigInt64(offset + i * 8, true);
+      offset += tieCount * 8;
+      for (let i = 0; i < tieCount; i++) tieConstraintId[i] = view.getInt32(offset + i * 4, true);
+      offset += tieCount * 4;
+      for (let i = 0; i < tieCount; i++) tieConstraintLevel[i] = view.getInt16(offset + i * 2, true);
+    }
+  } else {
+    for (let i = 0; i < N; i++) eventId[i] = BigInt(i);
+  }
+
+  return { clk, arrive, cmdId, typeId, sourceId, addr, eventId, requestId, finalCmdId,
+    selectedView, viewCommitted, readyAt, causeEventId, constraintId, constraintLevel,
+    tieOffsets, tieSourceEventId, tieConstraintId, tieConstraintLevel };
 }
 
 export function parseTrace(buf: ArrayBuffer): ParsedTrace {

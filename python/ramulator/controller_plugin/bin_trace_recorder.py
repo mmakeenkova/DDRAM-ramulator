@@ -14,3 +14,4 @@ class BinTraceRecorder(Component):
     impl = "BinTraceRecorder"
     path = Param(str, required=True)
     dram_type = Param(str, default='std::string(""')
+    record_equal_constraints = Param(bool, default=False)

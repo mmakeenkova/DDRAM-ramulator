@@ -24,6 +24,7 @@ struct Request {
   int type_id = -1;        // Request type. -1 is the convention for internal maintenance/direct-command requests.
   int source_id = -1;      // Source identifier (e.g., which core)
   int ingress_id = -1;     // External ingress identifier (e.g., gem5 memory port)
+  int64_t request_id = -1; // Controller-local stable identity used by diagnostics/traces
 
   int size_bytes = -1;     // Request size in bytes. Must be set explicitly by the frontend.
 
@@ -32,6 +33,12 @@ struct Request {
   // DDRAM: Tentative until the first issued prerequisite; copied with the request.
   int selected_view = -1;
   bool view_committed = false;
+  // Earliest cycle at which an ACT rejected by device-managed refresh may be retried.
+  Clk_t retry_after = -1;
+  int act_nack_count = 0;
+  // Last tentatively selected view rejected by autonomous DRAM.  TwoView may
+  // try the alternate view without learning the private lock table.
+  int nacked_view = -1;
   bool is_stat_updated = false;
 
   Clk_t arrive = -1;  // Clock cycle when the request arrives at the memory controller

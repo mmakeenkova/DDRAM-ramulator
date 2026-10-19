@@ -136,11 +136,27 @@
       </div>
 
       <div class="tab-bar-actions">
+        <UButton
+          v-if="!embeddedPanel"
+          icon="i-lucide-columns-2"
+          label="Compare"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+          to="/compare"
+        />
+        <TraceTimingBottlenecks class="tab-bar-action" />
         <TraceSettingsPopover class="tab-bar-action" />
         <TraceCommandColorLegend v-if="sessionStore.spec" class="tab-bar-action" />
       </div>
     </div>
     <div class="relative flex-1 min-h-0 overflow-hidden">
+      <div
+        v-if="compareAlignMode"
+        class="absolute z-30 top-2 left-1/2 -translate-x-1/2 rounded-md border border-amber-400/40 bg-neutral-950/90 px-3 py-1.5 text-xs text-amber-200 shadow-lg pointer-events-none"
+      >
+        Select a command to align this trace
+      </div>
       <canvas ref="canvas" class="block h-full w-full" :class="hoveredEvent && !cursorMode ? 'cursor-pointer' : 'cursor-crosshair'" />
       <canvas
         ref="labelCanvas"
@@ -208,6 +224,12 @@
           <div v-if="hoveredEvent.sourceId >= 0" class="flex items-center gap-3">
             <span><span class="text-zinc-500">src</span> {{ hoveredEvent.sourceId }}</span>
           </div>
+          <div v-if="hoveredEvent.requestId != null && hoveredEvent.requestId >= 0n" class="flex items-center gap-3">
+            <span><span class="text-zinc-500">request</span> #{{ hoveredEvent.requestId }}</span>
+            <span v-if="hoveredEvent.selectedView != null && hoveredEvent.selectedView >= 0">
+              <span class="text-zinc-500">view</span> {{ viewName(hoveredEvent.selectedView) }}
+            </span>
+          </div>
         </div>
       </template>
 
@@ -221,10 +243,18 @@
           <span class="font-semibold text-sm">{{ sessionStore.getCommandName(hoveredEvent.cmdId) }}</span>
           <span
             class="text-[10px] font-mono px-1.5 py-0.5 rounded"
-            :class="hoveredEvent.bus === 'command' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-sky-500/15 text-sky-400'"
+            :class="hoveredEvent.isInternal
+              ? 'bg-fuchsia-500/15 text-fuchsia-300'
+              : hoveredEvent.bus === 'command'
+                ? 'bg-emerald-500/15 text-emerald-400'
+                : 'bg-sky-500/15 text-sky-400'"
           >
-            {{ hoveredEvent.bus === 'command' ? 'CMD' : 'DATA' }}
+            {{ hoveredEvent.isInternal ? 'INTERNAL' : hoveredEvent.bus === 'command' ? 'CMD' : 'DATA' }}
           </span>
+          <span
+            v-if="hoveredEvent.selectedView != null && hoveredEvent.selectedView >= 0"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300"
+          >VIEW {{ viewName(hoveredEvent.selectedView) }}</span>
         </div>
 
         <div class="flex items-center gap-3 mt-1.5 text-xs font-mono">
@@ -233,6 +263,35 @@
         </div>
         <div v-if="hoveredEvent.bus === 'data' && hoveredEvent.busClk != null" class="text-xs font-mono mt-0.5">
           <span class="text-zinc-500">t_data</span> {{ hoveredEvent.busClk }} clk
+        </div>
+        <div v-if="hoveredEvent.requestId != null && hoveredEvent.requestId >= 0n" class="text-xs font-mono mt-0.5">
+          <span class="text-zinc-500">request</span> #{{ hoveredEvent.requestId }}
+          <span v-if="hoveredEvent.finalCmdId != null && hoveredEvent.finalCmdId >= 0" class="ml-3">
+            <span class="text-zinc-500">final</span> {{ sessionStore.getCommandName(hoveredEvent.finalCmdId) }}
+          </span>
+          <span v-if="hoveredEvent.viewCommitted" class="ml-2 text-amber-300">committed</span>
+        </div>
+        <div v-if="hoveredTiming" class="mt-2 pt-1.5 border-t border-zinc-700/50 text-xs font-mono">
+          <div>
+            <span class="text-zinc-500">earliest</span> {{ hoveredTiming.readyAt }} clk
+            <span class="ml-3"><span class="text-zinc-500">slack</span> {{ hoveredTiming.slack }} cyc</span>
+          </div>
+          <div v-if="hoveredTiming.causes.length" class="mt-1 space-y-0.5">
+            <div v-if="hoveredTiming.causes.length > 1" class="text-zinc-500">
+              {{ hoveredTiming.causes.length }} equally strict constraints
+            </div>
+            <div v-for="(cause, idx) in hoveredTiming.causes" :key="`${cause.constraintId}-${cause.sourceEventId}-${idx}`" class="flex items-start gap-1.5">
+              <span class="size-2 rounded-full shrink-0 mt-1" :style="{ backgroundColor: cause.color }" />
+              <span>
+                <span class="text-zinc-500">limited by</span>
+                {{ cause.description }}
+                <span v-if="cause.sourceCommand" class="ml-2 text-zinc-400">
+                  {{ cause.sourceCommand }} @ {{ cause.sourceClk }} (event #{{ cause.sourceEventId }})
+                </span>
+                <span v-else-if="cause.sourceEventId >= 0n" class="ml-2 text-zinc-400">event #{{ cause.sourceEventId }}</span>
+              </span>
+            </div>
+          </div>
         </div>
       </template>
 
@@ -263,7 +322,17 @@
 </template>
 
 <script setup lang="ts">
+import { getEventTimingCauses, timingCauseDescription } from '~/utils/timingCauses';
+import { isCompareHostMessage, type ComparePanelId, type ComparePanelMessage } from '~/utils/compareProtocol';
+import type { HitResult } from '~/composables/useRenderer';
+
 definePageMeta({ layout: 'trace' });
+
+const route = useRoute();
+const embeddedPanel = computed<ComparePanelId | null>(() => {
+  if (route.query.embedded !== '1') return null;
+  return route.query.panel === 'bottom' ? 'bottom' : 'top';
+});
 
 const uiStore = useUIStore();
 const tabs = [
@@ -273,6 +342,7 @@ const tabs = [
 ];
 
 const sessionStore = useSessionStore();
+const { parseTraceAsync } = useTrace();
 const traceLoadStatus = useTraceLoadStatus();
 const { isLive: isLiveStream, eventCount: streamEventCount, status: streamStatus } = useStreamSession();
 /** When true, viewport snaps to the latest cycles as streamed data grows. */
@@ -280,6 +350,24 @@ const followLive = ref(true);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const labelCanvas = ref<HTMLCanvasElement | null>(null);
 const tooltip = ref<HTMLDivElement | null>(null);
+const compareAlignMode = ref(false);
+
+function selectCompareAnchor(hit: HitResult): boolean {
+  const panel = embeddedPanel.value;
+  if (!panel || !compareAlignMode.value || hit.bus === 'request') return false;
+  const arrays = sessionStore.arrays;
+  if (!arrays) return false;
+  postCompareMessage({
+    type: 'ramulator-compare-anchor',
+    panel,
+    clk: Number(hit.clk),
+    eventId: String(arrays.eventId[hit.index] ?? hit.index),
+    command: sessionStore.getCommandName(hit.cmdId),
+    address: [...hit.addr],
+  });
+  compareAlignMode.value = false;
+  return true;
+}
 
 const {
   viewState,
@@ -294,9 +382,10 @@ const {
   cursorMode,
   cursorTime,
   setCursorMode,
+  setCursorTime,
   clearCursor,
   jumpCursor,
-} = useRenderer(canvas, labelCanvas, followLive);
+} = useRenderer(canvas, labelCanvas, followLive, selectCompareAnchor);
 
 const canJumpCursor = computed(() => cursorTime.value != null && uiStore.viewMode !== 'throughput');
 
@@ -311,6 +400,27 @@ defineShortcuts({
 function formatCycles(n: number): string {
   return Math.round(n).toLocaleString('en-US');
 }
+
+function viewName(view: number): string {
+  return view === 0 ? 'A' : view === 1 ? 'B' : String(view);
+}
+
+const hoveredTiming = computed(() => {
+  const event = hoveredEvent.value;
+  if (!event || event.readyAt == null || event.readyAt < 0n) return null;
+  const arrays = sessionStore.arrays;
+  const spec = sessionStore.spec;
+  return {
+    readyAt: event.readyAt,
+    slack: event.clk - event.readyAt,
+    causes: arrays && spec
+      ? getEventTimingCauses(arrays, spec, event.index).map(cause => ({
+          ...cause,
+          description: timingCauseDescription(cause, arrays, spec, event.index),
+        }))
+      : [],
+  };
+});
 
 const tooltipStyle = computed(() => {
   const offset = 12;
@@ -334,8 +444,107 @@ const tooltipStyle = computed(() => {
   };
 });
 
+function postCompareMessage(message: ComparePanelMessage) {
+  if (!embeddedPanel.value || window.parent === window) return;
+  window.parent.postMessage(message, window.location.origin);
+}
+
+let applyingCompareViewport = false;
+let applyingCompareCursor = false;
+
+function applyCompareViewport(start: number, duration: number) {
+  const span = Math.max(0, viewState.maxTime - viewState.minTime);
+  if (span <= 0) return;
+  const nextDuration = Math.max(
+    Math.min(viewState.minDuration, span),
+    Math.min(duration, span, viewState.maxDuration),
+  );
+  const maxStart = viewState.maxTime - nextDuration;
+  applyingCompareViewport = true;
+  viewState.duration = nextDuration;
+  viewState.start = Math.max(viewState.minTime, Math.min(start, maxStart));
+  nextTick(() => { applyingCompareViewport = false; });
+}
+
+function applyCompareCursor(time: number | null) {
+  applyingCompareCursor = true;
+  setCursorTime(time);
+  nextTick(() => { applyingCompareCursor = false; });
+}
+
+async function onCompareHostMessage(event: MessageEvent) {
+  const panel = embeddedPanel.value;
+  if (!panel || event.origin !== window.location.origin || event.source !== window.parent) return;
+  if (!isCompareHostMessage(event.data) || event.data.panel !== panel) return;
+  if (event.data.type === 'ramulator-compare-set-viewport') {
+    applyCompareViewport(event.data.start, event.data.duration);
+    return;
+  }
+  if (event.data.type === 'ramulator-compare-set-cursor') {
+    applyCompareCursor(event.data.time);
+    return;
+  }
+  if (event.data.type === 'ramulator-compare-align-mode') {
+    compareAlignMode.value = event.data.enabled;
+    if (event.data.enabled) {
+      uiStore.setViewMode('command');
+      setCursorMode(false);
+    }
+    return;
+  }
+  if (event.data.type !== 'ramulator-compare-load') return;
+
+  traceLoadStatus.value = `Loading ${event.data.name}…`;
+  try {
+    const trace = await parseTraceAsync(event.data.buffer, {
+      onProgress: message => { traceLoadStatus.value = message; },
+    });
+    sessionStore.loadTrace(trace);
+    uiStore.setViewMode('command');
+    traceLoadStatus.value = null;
+    postCompareMessage({
+      type: 'ramulator-compare-loaded',
+      panel,
+      name: event.data.name,
+      dramType: trace.header.dramType,
+      events: trace.header.numEntries,
+    });
+  } catch (error) {
+    traceLoadStatus.value = null;
+    postCompareMessage({
+      type: 'ramulator-compare-error',
+      panel,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+watch(
+  () => [viewState.start, viewState.duration] as const,
+  ([start, duration]) => {
+    const panel = embeddedPanel.value;
+    if (!panel || !sessionStore.isLoaded || applyingCompareViewport) return;
+    postCompareMessage({ type: 'ramulator-compare-viewport', panel, start, duration });
+  },
+  { flush: 'post' },
+);
+
+watch(cursorTime, (time) => {
+  const panel = embeddedPanel.value;
+  if (!panel || !sessionStore.isLoaded || applyingCompareCursor) return;
+  postCompareMessage({ type: 'ramulator-compare-cursor', panel, time });
+}, { flush: 'post' });
+
 onMounted(() => {
   uiStore.hydrateSettings();
+  if (embeddedPanel.value) {
+    window.addEventListener('message', onCompareHostMessage);
+    postCompareMessage({ type: 'ramulator-compare-ready', panel: embeddedPanel.value });
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener('message', onCompareHostMessage);
 });
 </script>
 

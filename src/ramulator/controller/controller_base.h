@@ -90,6 +90,7 @@ class ControllerBase : public IController, public Implementation {
   float m_wr_low_watermark;
   float m_wr_high_watermark;
   bool m_is_write_mode = false;
+  int64_t m_next_request_id = 0;
 
   // Cached spec lookups
   int m_bank_level = -1;
@@ -125,6 +126,8 @@ class ControllerBase : public IController, public Implementation {
   size_t s_num_maintenance_reqs_served = 0;
   size_t s_num_read_reqs_forwarded = 0;
   size_t s_num_write_reqs_coalesced = 0;
+  size_t s_num_internal_refreshes = 0;
+  size_t s_num_act_nacks = 0;
   size_t s_queue_len = 0;
   size_t s_read_queue_len = 0;
   size_t s_write_queue_len = 0;

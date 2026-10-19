@@ -92,6 +92,8 @@ class DRAMStandard(Component):
     read_latency = "nCL + nBL"
     row_commands = []  # type: list[str]  — commands on the row bus (dual-bus standards)
     column_commands = []  # type: list[str]  — commands on the column bus (dual-bus standards)
+    # Device-internal events are trace-visible, but never occupy an external CA bus.
+    internal_commands = []  # type: list[str]
 
     # ---- Class-level: presets ----
     org_presets = {}  # type: dict[str, dict]
@@ -268,6 +270,12 @@ class DRAMStandard(Component):
                     entry.append(tc.sibling)
                 if tc.shared_window:
                     entry.append(shared_window_group)
+                # Diagnostic label retained by the runtime timing engine and
+                # trace visualizer.  Keep it last so older positional fields
+                # remain unchanged.
+                while len(entry) < 7:
+                    entry.append(-1 if len(entry) == 6 else False if len(entry) == 5 else 1)
+                entry.append(tc.latency)
                 constraints.append(entry)
 
         # Auto-generate bus occupancy constraints from command_cycles + bus
@@ -355,6 +363,9 @@ class DRAMStandard(Component):
 
         constraints = []
         for bus_cmds in buses:
+            bus_cmds = [cmd for cmd in bus_cmds if cmd not in cls.internal_commands]
+            if not bus_cmds:
+                continue
             # Group commands by their cycle count (in ticks)
             cycle_groups = {}  # ticks -> [cmd_names]
             for cmd in bus_cmds:
@@ -367,7 +378,7 @@ class DRAMStandard(Component):
                 if ticks == 1:
                     continue  # 1-tick commands: controller already issues one cmd per tick
                 p_ids = [cmd_idx[c] for c in cmds]
-                constraints.append([0, p_ids, all_bus_ids, ticks])
+                constraints.append([0, p_ids, all_bus_ids, ticks, 1, False, -1, "command bus"])
 
         return constraints
 

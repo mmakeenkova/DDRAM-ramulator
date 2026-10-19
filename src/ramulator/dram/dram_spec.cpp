@@ -1,5 +1,7 @@
 #include "ramulator/dram/dram_spec.h"
 
+#include <fmt/format.h>
+
 namespace Ramulator {
 
 void DRAMSpec::load_config(const ConfigNode& config) {
@@ -57,10 +59,14 @@ void DRAMSpec::load_config(const ConfigNode& config) {
     int window = f.size() > 4 ? f[4].as<int>() : 1;
     bool sibling = f.size() > 5 ? f[5].as<bool>() : false;
     int history_group = f.size() > 6 ? f[6].as<int>() : -1;
+    std::string label = f.size() > 7 ? f[7].as<std::string>() : fmt::format("{} cycles", latency);
     for (const auto& p : f[1].seq()) {
       for (const auto& fc : f[2].seq()) {
+        const int constraint_id = static_cast<int>(timing_constraint_info.size());
+        timing_constraint_info.push_back({level, p.as<int>(), fc.as<int>(), latency,
+                                          window, sibling, history_group, label});
         timing_cons[level][p.as<int>()].push_back(
-            {fc.as<int>(), latency, window, sibling, history_group});
+            {fc.as<int>(), latency, window, sibling, history_group, constraint_id});
       }
     }
   }

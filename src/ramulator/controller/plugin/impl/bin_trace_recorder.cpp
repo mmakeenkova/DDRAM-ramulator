@@ -1,5 +1,5 @@
 /*
- * RAM2BIN v1.1 — Ramulator2 Binary Command Trace
+ * RAM2BIN v1.3 — Ramulator2 Binary Command Trace
  * ==============================================
  *
  * A self-describing, Structure-of-Arrays binary trace format for DRAM
@@ -33,6 +33,10 @@
  * +-----------------------------+
  * | addr[L-1][]  N x int32      |  <- last level   (e.g. Column)
  * +-----------------------------+
+ * | diagnostics (v1.2+)         |  <- request/view/timing-cause arrays
+ * +-----------------------------+
+ * | tied causes (optional v1.3) |  <- CSR offsets + all equal strictest causes
+ * +-----------------------------+
  *
  * N = num_entries, L = level_count.
  * Total data size = N * (8 + 8 + 1 + 1 + 2 + 4*L) = N * (20 + 4*L).
@@ -45,7 +49,7 @@
  * +------------------+--------+--------+-----------------------------------------------+
  * | magic            |  0     |  8B    | "RAM2BIN\0" (null-terminated, zero-padded)    |
  * | version          |  8     |  2B    | [major, minor] file format version            |
- * | flags            | 10     |  2B    | Bit flags (reserved, must be 0)               |
+ * | flags            | 10     |  2B    | bit 0: diagnostics; bit 1: equal causes       |
  * | level_count      | 12     |  2B    | uint16  Number of hierarchy levels            |
  * | command_count    | 14     |  2B    | uint16  Number of command types               |
  * | timing_count     | 16     |  2B    | uint16  Number of timing parameters           |
@@ -102,7 +106,12 @@
  * Concrete values matching timing_names order.
  * e.g. [2400, 4, 16, 16, 16, 39, 55, ...] for DDR4_2400R
  *
- * 8. Padding
+ * 8. Timing constraint table (v1.2 and later)
+ * uint32 count, followed by resolved command-pair records. Each record stores
+ * its label, hierarchy level, preceding/following command IDs, value, window,
+ * sibling flag, and shared-history group.
+ *
+ * 9. Padding
  * 0-7 zero bytes to align data_offset to 8 bytes.
  *
  * DATA ARRAYS (SoA, starts at data_offset)
@@ -126,6 +135,21 @@
  * | ...           |           |                                                   |
  * | addr[L-1][]   |  4B int32 | [D + (20+4(L-1))N,  D + (20+4L)N)                 |
  * +---------------+-----------+---------------------------------------------------+
+ * | event_id[]    |  8B int64 | Stable issued-command ID (v1.2)                    |
+ * | request_id[]  |  8B int64 | Stable controller-request ID (v1.2)                |
+ * | final_cmd[]   |  2B int16 | Request's selected final command (v1.2)             |
+ * | selected_view |  1B int8  | -1 unset, 0=A, 1=B (v1.2)                          |
+ * | view_commit[] |  1B uint8 | Assignment committed flag (v1.2)                   |
+ * | ready_at[]    |  8B int64 | Earliest issue clock imposed by timing (v1.2)       |
+ * | cause_event[] |  8B int64 | Event that imposed ready_at (v1.2)                  |
+ * | constraint[]  |  4B int32 | Index into timing constraint table (v1.2)           |
+ * | cause_level[] |  2B int16 | Hierarchy level where constraint applied (v1.2)     |
+ * +---------------+-----------+---------------------------------------------------+
+ * | tie_offsets[] |  8B uint64| N+1 CSR offsets (optional v1.3)                     |
+ * | tie_source[]  |  8B int64 | M source event IDs (optional v1.3)                  |
+ * | tie_cons[]    |  4B int32 | M constraint-table indices (optional v1.3)          |
+ * | tie_level[]   |  2B int16 | M hierarchy levels (optional v1.3)                  |
+ * +---------------+-----------+---------------------------------------------------+
  *
  * D = data_offset, N = num_entries, L = level_count
  *
@@ -144,9 +168,10 @@
  * =====
  * - All integers are little-endian.
  * - All strings are ASCII, null-terminated.
- * - Reserved / flag fields must be zero for v1.
  * - One file per channel; path is suffixed with ".ch0", ".ch1", etc.
- * - Total file size = data_offset + N * (20 + 4*L).
+ * - v1.0/v1.1 data size is N * (20 + 4*L); v1.2 appends 44N diagnostic bytes.
+ * - v1.3 is emitted only when record_equal_constraints=true and appends
+ *   8(N+1) + 14M bytes, where M is the number of equally strict causes.
  */
 
 #include <cstdint>
@@ -170,7 +195,8 @@ namespace Ramulator {
 /// Structure-of-Arrays order at finalize().  One file per channel.
 ///
 /// Config (Python):
-///   ramulator.ControllerPlugin.BinTraceRecorder(path="trace.bin")
+///   ramulator.ControllerPlugin.BinTraceRecorder(
+///       path="trace.bin", record_equal_constraints=true)
 class BinTraceRecorder : public IControllerPlugin, public Implementation {
   RAMULATOR_REGISTER_IMPLEMENTATION(IControllerPlugin, BinTraceRecorder, "BinTraceRecorder")
 
@@ -178,6 +204,7 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
   void init() override {
     RAMULATOR_PARSE_PARAM(m_path, std::string, "path").required();
     RAMULATOR_PARSE_PARAM(m_dram_type, std::string, "dram_type").default_val(std::string(""));
+    RAMULATOR_PARSE_PARAM(m_record_equal_constraints, bool, "record_equal_constraints").default_val(false);
   }
 
   void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
@@ -185,6 +212,7 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     const auto& spec = *m_ctrl->m_device.m_spec;
     m_level_count = spec.level_count;
     m_addr_bufs.resize(m_level_count);
+    m_tie_offsets.push_back(0);
 
     std::string filepath = fmt::format("{}.ch{}.ram2bin", m_path, m_ctrl->m_channel_id);
     m_file.open(filepath, std::ios::binary);
@@ -204,6 +232,24 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     m_cmd_buf.push_back(static_cast<uint8_t>(req.command));
     m_type_buf.push_back(static_cast<int8_t>(req.type_id));
     m_source_buf.push_back(static_cast<int16_t>(req.source_id));
+    m_event_id_buf.push_back(m_ctrl->m_device.m_last_issue_event_id);
+    m_request_id_buf.push_back(req.request_id);
+    m_final_cmd_buf.push_back(static_cast<int16_t>(req.final_command));
+    m_selected_view_buf.push_back(static_cast<int8_t>(req.selected_view));
+    m_view_committed_buf.push_back(req.view_committed ? 1u : 0u);
+    const auto& cause = m_ctrl->m_device.m_last_issue_timing_cause;
+    m_ready_at_buf.push_back(cause.ready_at);
+    m_cause_event_buf.push_back(cause.source_event_id);
+    m_constraint_id_buf.push_back(cause.constraint_id);
+    m_constraint_level_buf.push_back(static_cast<int16_t>(cause.level));
+    if (m_record_equal_constraints) {
+      for (const auto& tied : m_ctrl->m_device.m_last_issue_timing_causes) {
+        m_tie_source_event_buf.push_back(tied.source_event_id);
+        m_tie_constraint_id_buf.push_back(tied.constraint_id);
+        m_tie_level_buf.push_back(static_cast<int16_t>(tied.level));
+      }
+    }
+    m_tie_offsets.push_back(m_tie_source_event_buf.size());
     for (int k = 0; k < m_level_count; k++) {
       m_addr_bufs[k].push_back(static_cast<int32_t>(req.addr_vec[k]));
     }
@@ -221,6 +267,19 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     m_cmd_buf = {};
     m_type_buf = {};
     m_source_buf = {};
+    m_event_id_buf = {};
+    m_request_id_buf = {};
+    m_final_cmd_buf = {};
+    m_selected_view_buf = {};
+    m_view_committed_buf = {};
+    m_ready_at_buf = {};
+    m_cause_event_buf = {};
+    m_constraint_id_buf = {};
+    m_constraint_level_buf = {};
+    m_tie_offsets = {};
+    m_tie_source_event_buf = {};
+    m_tie_constraint_id_buf = {};
+    m_tie_level_buf = {};
     m_addr_bufs = {};
   }
 
@@ -228,6 +287,7 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
   ControllerBase* m_ctrl = nullptr;
   std::string m_path;
   std::string m_dram_type;
+  bool m_record_equal_constraints = false;
   int m_level_count = 0;
   std::ofstream m_file;
   uint64_t m_data_offset = 0;
@@ -238,6 +298,22 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
   std::vector<int8_t>   m_type_buf;
   std::vector<int16_t>  m_source_buf;
   std::vector<std::vector<int32_t>> m_addr_bufs;
+  // v1.2 diagnostic arrays. Appended after all v1.1 arrays so old readers
+  // continue to decode the original prefix unchanged.
+  std::vector<int64_t> m_event_id_buf;
+  std::vector<int64_t> m_request_id_buf;
+  std::vector<int16_t> m_final_cmd_buf;
+  std::vector<int8_t> m_selected_view_buf;
+  std::vector<uint8_t> m_view_committed_buf;
+  std::vector<int64_t> m_ready_at_buf;
+  std::vector<int64_t> m_cause_event_buf;
+  std::vector<int32_t> m_constraint_id_buf;
+  std::vector<int16_t> m_constraint_level_buf;
+  // v1.3 optional CSR-style lists of all constraints tied at ready_at.
+  std::vector<uint64_t> m_tie_offsets;
+  std::vector<int64_t> m_tie_source_event_buf;
+  std::vector<int32_t> m_tie_constraint_id_buf;
+  std::vector<int16_t> m_tie_level_buf;
 
   // ── Header ────────────────────────────────────────────────────────
 
@@ -265,7 +341,8 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     Header h{};
     std::memcpy(h.magic, "RAM2BIN", 8);
     h.version[0]    = 1;
-    h.version[1]    = 1;
+    h.version[1]    = m_record_equal_constraints ? 3 : 2;
+    h.flags         = 1u | (m_record_equal_constraints ? 2u : 0u);
     h.level_count   = static_cast<uint16_t>(spec.level_count);
     h.command_count = static_cast<uint16_t>(spec.command_count);
     h.timing_count  = static_cast<uint16_t>(spec.timing_count);
@@ -308,6 +385,7 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
       if (meta.is_refreshing)     bits |= 1u << 3;
       if (meta.is_row_command)    bits |= 1u << 4;
       if (meta.is_column_command) bits |= 1u << 5;
+      if (meta.is_internal)       bits |= 1u << 6;
       write_val(bits);
     }
 
@@ -319,6 +397,20 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
 
     for (int val : spec.timing_vals)
       write_val(static_cast<int32_t>(val));
+
+    // v1.2: the resolved constraint table. Each runtime entry represents one
+    // concrete preceding/following pair and therefore maps directly to a cause.
+    write_val(static_cast<uint32_t>(spec.timing_constraint_info.size()));
+    for (const auto& info : spec.timing_constraint_info) {
+      write_cstr(info.label);
+      write_val(static_cast<int16_t>(info.level));
+      write_val(static_cast<int16_t>(info.preceding));
+      write_val(static_cast<int16_t>(info.following));
+      write_val(static_cast<int32_t>(info.value));
+      write_val(static_cast<int16_t>(info.window));
+      write_val(static_cast<uint8_t>(info.sibling ? 1 : 0));
+      write_val(static_cast<int16_t>(info.history_group));
+    }
   }
 
   // ── Data arrays ───────────────────────────────────────────────────
@@ -331,6 +423,21 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     write_array(m_source_buf);
     for (auto& buf : m_addr_bufs)
       write_array(buf);
+    write_array(m_event_id_buf);
+    write_array(m_request_id_buf);
+    write_array(m_final_cmd_buf);
+    write_array(m_selected_view_buf);
+    write_array(m_view_committed_buf);
+    write_array(m_ready_at_buf);
+    write_array(m_cause_event_buf);
+    write_array(m_constraint_id_buf);
+    write_array(m_constraint_level_buf);
+    if (m_record_equal_constraints) {
+      write_array(m_tie_offsets);
+      write_array(m_tie_source_event_buf);
+      write_array(m_tie_constraint_id_buf);
+      write_array(m_tie_level_buf);
+    }
   }
 
   // ── I/O helpers ───────────────────────────────────────────────────

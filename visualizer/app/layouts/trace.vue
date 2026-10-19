@@ -144,7 +144,9 @@ const treeItems = computed(() => {
     children: [
       {
         label: '_bus_cmd',
-        displayName: 'Command Bus',
+        displayName: spec.commandMeta.some(meta => meta.isInternal)
+          ? 'Commands / Internal Events'
+          : 'Command Bus',
         children: cmdChildren,
       } as TreeItem,
       {
