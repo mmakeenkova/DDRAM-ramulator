@@ -6,5 +6,6 @@
 ###############################################################################
 from .frfcfs import FRFCFS
 from .frfcfs_row_hit import FRFCFSRowHit
+from .frfcfs_view_aware import FRFCFSViewAware
 
-__all__ = ['FRFCFS', 'FRFCFSRowHit']
+__all__ = ['FRFCFS', 'FRFCFSRowHit', 'FRFCFSViewAware']

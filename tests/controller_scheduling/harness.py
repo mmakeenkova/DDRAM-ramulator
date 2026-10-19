@@ -139,6 +139,10 @@ class ControllerUnderTest:
     def is_idle(self) -> bool:
         return self._cpp.is_idle()
 
+    def take_completions(self) -> list[dict]:
+        """DDRAM: Drain per-request callback clocks for model equivalence tests."""
+        return list(self._cpp.take_completions())
+
     def reset_stats(self) -> None:
         self._cpp.reset_stats()
 

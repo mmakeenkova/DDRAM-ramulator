@@ -527,6 +527,44 @@ If you only want one standard:
 PYTHONPATH=python pytest tests/latency_throughput/test_fast.py -v -s -k DDR4
 ```
 
+#### DDRAM-P bandwidth–latency comparison
+
+```bash
+PYTHONPATH=python .venv/bin/python -m pytest tests/latency_throughput/test_ddram_p_comparison.py -v -s
+```
+
+This production-simulation validation compares DDR5 + FRFCFSRowHit, DDRAM-P +
+AlwaysA + FRFCFSRowHit, and DDRAM-P + TwoView + FRFCFSViewAware. It sweeps 13
+injection intervals at DDR5-4800AN, using 100% reads, Open-page policy, no refresh,
+5,000 warmup cycles, and 4,096 sampled read completions per point.
+
+The full device organization is unchanged. Traffic visits four banks across
+four bank groups and one rank, with either one resident row per bank (control)
+or two alternating rows per bank (the dual-view case), one request per row
+visit. This deliberately tests row locality; it does not predict arbitrary
+application performance or isolate the scheduler's benefit from the device's.
+Latency is the mean time from accepted request to read completion, excluding
+source-side backpressure. Bandwidth counts completed device traffic.
+
+The test asserts DDR5/AlwaysA equivalence, one-row control equivalence, removal
+of recurring conflicts with two views, reduced two-row latency, more bandwidth
+within a stated 60 ns latency budget, and the shared data-bus bandwidth bound.
+Both single- and dual-view configurations can saturate the shared bus: this
+experiment checks latency benefits without requiring higher raw peak bandwidth. It saves a figure with one column per model
+and one row per workload, plus reproducible measurements:
+
+```text
+tests/latency_throughput/plots/ddram_comparison/comparison.png
+tests/latency_throughput/plots/ddram_comparison/comparison.svg
+tests/latency_throughput/plots/ddram_comparison/measurements.csv
+tests/latency_throughput/plots/ddram_comparison/measurements.json
+```
+
+The sweep runner's optional `traffic_rows` and `traffic_bank_counts` settings
+restrict generated addresses, preserving the modeled device capacity. Existing
+sweeps retain their full address range. This performance sweep runs separately
+from the short `pytest-ddram.ini` regression suite.
+
 ### 5.4 Full Latency-Throughput
 
 Full latency-throughput is a longer refresh-enabled sweep. It uses the same
@@ -691,6 +729,64 @@ dut.assert_commands(["ACT", "RD", "PREpb", "ACT", "RD"], history=history)
 The canonical full controller example lives in:
 
 - `tests/controller_scheduling/examples/test_controller_example.py`
+
+For DDRAM-P, `GenericDDR` accepts `view_selection="AlwaysA"` to compare the
+single-view integration with DDR5. The default `"Auto"` uses the existing path for
+conventional devices and selects `"TwoView"` for DDRAM-P. Explicit `"AlwaysA"` and
+`"TwoView"` require DDRAM-P; both currently require the `Open` row policy.
+
+```python
+dram = ramulator.dram.DDRAM_P(
+    org_preset="DDR5_16Gb_x8", timing_preset="DDR5_3200AN", rank=1
+)
+dut = cs.ControllerUnderTest.make_generic_ddr(dram, view_selection="AlwaysA")
+```
+
+`AlwaysA` fixes every data request to A and leaves request arbitration to the
+scheduler. It needs no exclusive view reservations. `TwoView` reserves a chosen
+view and target row from the first issued prerequisite through the terminal
+command, preventing competing assignments from changing placement mid-request.
+
+The comparison suite checks normalized command traces, issue cycles, per-request
+callback cycles, controller statistics, and A-only timing constraints at 3200,
+4800, and 6400 MT/s with FRFCFS, FRFCFS-RowHit, and FRFCFS-ViewAware:
+
+```bash
+PYTHONPATH=python pytest tests/controller_scheduling/GenericDDRController/test_ddram_p_always_a.py -q
+```
+
+Use `FRFCFSViewAware` with `TwoView` to protect queued hits independently in each
+view:
+
+```python
+dut = cs.ControllerUnderTest.make_generic_ddr(
+    dram, scheduler=ramulator.scheduler.FRFCFSViewAware(), view_selection="TwoView"
+)
+```
+
+The scheduler retains readiness-first, arrival-order arbitration. A prerequisite
+precharge cannot discard older or equal-age hits in the affected view: `PRE_A`
+waits for protected A hits, and `PRE_B` waits for protected B hits. Hits in B do
+not block replacement in A, or vice versa. The controller also allows one view's precharge while the
+other view waits for its activation-to-access delay; maintenance still waits for
+active requests in all targeted views. View placement and reservations remain
+in the view-selection policy. For conventional DDR5 and `AlwaysA`, this scheduler
+preserves `FRFCFSRowHit` behavior.
+
+For routine DDRAM-P development, use the focused suite:
+
+```bash
+PYTHONPATH=python .venv/bin/python -m pytest -c pytest-ddram.ini -q
+```
+
+It includes DDRAM-P device timing, legality, and maintenance tests; two-view
+controller tests; the DDR5/AlwaysA comparisons; and conventional DDR4 device and
+GenericDDR controller regressions. The `ddram_p` marker selects relevant cases in
+shared test files. GDDR, HBM, and LPDDR cases are outside this suite. The ordinary
+full-suite commands remain available and continue to include those standards.
+Add `--collect-only` to inspect the selection, or `-v` for individual test results.
+When adding a new DDRAM-P test module, add it to `pytest-ddram.ini` and mark it
+`ddram_p`; tests added to the listed DDRAM-P modules inherit the module marker.
 
 ### 5.7 Power Model
 

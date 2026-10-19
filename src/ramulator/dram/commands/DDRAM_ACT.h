@@ -17,8 +17,13 @@ struct DDRAM_ACT {
     bank->m_state = T::State::Opened;
   }
 
+  // DDRAM: Reject duplicate-row targeting before considering a victim precharge.
   static int preq(DRAMNode* bank, int cmd, const AddrVec_t& addr_vec, Clk_t clk) {
     const int row = addr_vec[T::Level::Row];
+
+    if (DDRAM::row_open_in_other_view(bank, View, row)) {
+      throw std::logic_error("DDRAM-P: request row is open in other view");
+    }
 
     // view hit
     if (DDRAM::row_hit(bank, View, row)) {
@@ -28,13 +33,6 @@ struct DDRAM_ACT {
     // another row is open in this view -> close it first 
     if (DDRAM::view_open(bank, View)){
       return View == DDRAM::VIEW_A ? T::Command::PRE_A : T::Command::PRE_B;
-    }
-
-    // this view is closed, but requested row is already open in other view
-    if (DDRAM::row_open_in_other_view(bank, View, row)) {
-      // this is a data hazard
-      throw std::logic_error("DDRAM-P: request row is open in other view");
-      // fyi: this should not happen unless the controller does sth absolutely stupid and probably wrong
     }
 
     return View == DDRAM::VIEW_A

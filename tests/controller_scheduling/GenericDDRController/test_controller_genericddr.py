@@ -27,6 +27,7 @@ def make_gddr6_dut(*, scheduler=None):
     )
 
 
+@pytest.mark.ddram_p
 def test_row_miss_emits_act_then_rd():
     dut = make_dut()
     a = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=0, Column=0)
@@ -38,6 +39,7 @@ def test_row_miss_emits_act_then_rd():
     dut.assert_gap(0, 1, dut.timings["nRCD"], history=history)
 
 
+@pytest.mark.ddram_p
 def test_row_hit_follow_up_emits_only_rd():
     dut = make_dut()
     a = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=0, Column=0)
@@ -51,6 +53,7 @@ def test_row_hit_follow_up_emits_only_rd():
     dut.assert_gap(1, 2, dut.timings["nCCDL"], history=history)
 
 
+@pytest.mark.ddram_p
 def test_row_conflict_emits_prepb_act_rd():
     dut = make_dut()
     a0 = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=0, Column=0)
@@ -67,6 +70,7 @@ def test_row_conflict_emits_prepb_act_rd():
     dut.assert_gap(3, 4, dut.timings["nRCD"], history=history)
 
 
+@pytest.mark.ddram_p
 def test_frfcfs_prefers_ready_request_over_older_blocked_request():
     dut = make_dut()
     row0 = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=0, Column=0)
@@ -112,6 +116,7 @@ def test_frfcfs_rowhit_keeps_same_bank_row_hits_before_conflict_close():
     assert [item.command for item in history].count("PREpb") == 1
 
 
+@pytest.mark.ddram_p
 def test_closedcap_upgrades_second_access_to_rda():
     dut = make_dut(row_policy=ramulator.row_policy.ClosedCAP(cap=1))
     a = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=0, Column=0)
@@ -123,6 +128,7 @@ def test_closedcap_upgrades_second_access_to_rda():
     dut.assert_commands(["ACT", "RD", "RDA"], history=history)
 
 
+@pytest.mark.ddram_p
 def test_priority_send_tracks_maintenance_stats():
     dut = make_dut()
     refresh = dut.addr_vec(Rank=0, BankGroup=dut.ALL, Bank=dut.ALL, Row=dut.ALL, Column=0)
@@ -136,6 +142,7 @@ def test_priority_send_tracks_maintenance_stats():
     assert stats["num_maintenance_reqs_served"] == 1
 
 
+@pytest.mark.ddram_p
 def test_controller_addr_vec_rejects_none():
     dut = make_dut()
 

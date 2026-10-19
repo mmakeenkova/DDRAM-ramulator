@@ -1,4 +1,5 @@
 #include "ramulator/base/base.h"
+#include "ramulator/base/param.h"
 #include "ramulator/controller/controller_base.h"
 #include "ramulator/controller/refresh/i_refresh_manager.h"
 #include "ramulator/controller/rowpolicy/i_row_policy.h"
@@ -11,6 +12,10 @@ class GenericDDRController : public ControllerBase {
  public:
   void init() override {
     init_base();
+    // DDRAM: Auto preserves conventional devices and enables TwoView for DDRAM-P.
+    std::string view_selection;
+    RAMULATOR_PARSE_PARAM(view_selection, std::string, "view_selection").default_val("Auto");
+    init_view_selection(view_selection);
   }
   void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
     setup_base(frontend, memory_system);
@@ -57,6 +62,7 @@ void GenericDDRController::tick() {
 
     // Issue command to DRAM device
     m_device.issue_command(cand.it->command, cand.it->addr_vec, m_clk);
+    on_request_issued(*cand.it);
 
     // Notify row policy and plugins of the issued command
     m_rowpolicy->on_issue(*cand.it);

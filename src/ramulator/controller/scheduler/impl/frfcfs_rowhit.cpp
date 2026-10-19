@@ -35,7 +35,10 @@ class FRFCFSRowHitScheduler : public IScheduler, public Implementation {
 
     // Pass 1: resolve prerequisites and record all row-hits.
     for (auto it = buffer.begin(); it != buffer.end(); it++) {
-      it->command = m_ctrl->get_preq_command(it->final_command, it->addr_vec);
+      // DDRAM: Resolve through the controller; blocked assignments are ineligible.
+      if (!m_ctrl->prepare_request(*it)) {
+        continue;
+      }
       
       if (m_ctrl->m_device.check_rowbuffer_hit(it->final_command, it->addr_vec, m_ctrl->m_clk)) {
         const int bank_id = m_ctrl->m_device.get_flat_bank_id(it->addr_vec);
@@ -53,6 +56,10 @@ class FRFCFSRowHitScheduler : public IScheduler, public Implementation {
     bool cand_timing_ok = false;
 
     for (auto it = buffer.begin(); it != buffer.end(); it++) {
+      // DDRAM: Pass one marks requests blocked by view reservations.
+      if (it->command == -1) {
+        continue;
+      }
       if (filter && !filter(*it)) {
         continue;
       }

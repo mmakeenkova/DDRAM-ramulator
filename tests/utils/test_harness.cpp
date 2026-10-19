@@ -273,13 +273,18 @@ class ControllerUnderTestCpp {
     bool read_like = is_read_like_request(type_id);
     if (read_like) {
       m_read_completions_pending++;
-      req.callback = [this](Request&) {
+    }
+    // DDRAM: Capture actual callback clocks for per-request DDR5 equivalence checks.
+    req.callback = [this, read_like](Request& completed) {
+      if (read_like) {
         if (m_read_completions_pending == 0) {
           throw std::runtime_error("ControllerUnderTest read completion accounting underflow");
         }
         m_read_completions_pending--;
-      };
-    }
+      }
+      m_completions.push_back({m_controller->m_clk, completed.arrive, completed.type_id,
+                               completed.source_id, completed.addr_vec});
+    };
 
     if (!m_controller->send(req)) {
       if (read_like) {
@@ -336,6 +341,22 @@ class ControllerUnderTestCpp {
     return m_command_outstanding == 0 && m_read_completions_pending == 0;
   }
 
+  // DDRAM: Drain completion records independently of the issued-command stream.
+  nb::list take_completions() {
+    nb::list result;
+    for (const auto& completion : m_completions) {
+      nb::dict item;
+      item["clk"] = completion.clk;
+      item["arrive"] = completion.arrive;
+      item["type_id"] = completion.type_id;
+      item["source_id"] = completion.source_id;
+      item["addr_vec"] = completion.addr_vec;
+      result.append(item);
+    }
+    m_completions.clear();
+    return result;
+  }
+
   // Start a new stats window, as a frontend does after warmup.
   void reset_stats() {
     m_memory_system->reset_stats_recursive();
@@ -358,6 +379,15 @@ class ControllerUnderTestCpp {
   size_t m_command_outstanding = 0;
   size_t m_read_completions_pending = 0;
   bool m_stats_finalized = false;
+  // DDRAM: Store plain C++ records so callbacks do not depend on Python objects.
+  struct Completion {
+    Clk_t clk;
+    Clk_t arrive;
+    int type_id;
+    int source_id;
+    AddrVec_t addr_vec;
+  };
+  std::vector<Completion> m_completions;
 
   const DRAMSpec& spec() const {
     return *m_controller_base->m_device.m_spec;
@@ -426,6 +456,7 @@ NB_MODULE(_ramulator_test, m) {
       .def("priority_send", &ControllerUnderTestCpp::priority_send, nb::arg("command"), nb::arg("addr_vec"))
       .def("tick", &ControllerUnderTestCpp::tick)
       .def("is_idle", &ControllerUnderTestCpp::is_idle)
+      .def("take_completions", &ControllerUnderTestCpp::take_completions)
       .def("reset_stats", &ControllerUnderTestCpp::reset_stats)
       .def("stats", &ControllerUnderTestCpp::stats);
 }

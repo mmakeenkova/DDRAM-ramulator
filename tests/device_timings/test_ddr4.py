@@ -4,7 +4,7 @@ import ramulator
 import tests.device_timings.harness as device_timings
 
 
-pytestmark = pytest.mark.device_timings
+pytestmark = [pytest.mark.device_timings, pytest.mark.ddram_p]
 
 
 def make_dut(*, channel_id=0, **overrides):

@@ -23,3 +23,6 @@ def pytest_configure(config):
         "markers", "controller_scheduling: Controller request scheduling tests"
     )
     config.addinivalue_line("markers", "power: DRAM power model tests")
+    config.addinivalue_line(
+        "markers", "ddram_p: DDRAM-P device/controller tests and conventional DDR regression coverage"
+    )

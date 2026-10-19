@@ -24,7 +24,10 @@ class FRFCFSScheduler : public IScheduler, public Implementation {
 
     for (auto it = buffer.begin(); it != buffer.end(); it++) {
       // Derive the current command (prerequisite resolution)
-      it->command = m_ctrl->get_preq_command(it->final_command, it->addr_vec);
+      // DDRAM: Resolve through the controller; blocked assignments are ineligible.
+      if (!m_ctrl->prepare_request(*it)) {
+        continue;
+      }
 
       // Apply eligibility filter
       if (filter && !filter(*it)) {

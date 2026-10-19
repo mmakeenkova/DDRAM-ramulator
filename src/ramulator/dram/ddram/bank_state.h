@@ -2,6 +2,7 @@
 
 #include "ramulator/dram/node.h"
 #include <assert.h>
+#include <stdexcept>
 
 namespace Ramulator::DDRAM {
 
@@ -25,11 +26,13 @@ inline bool row_open_in_other_view(const DRAMNode* bank, int view, int row) {
   return row_hit(bank, other_view, row);
 }
 
+// DDRAM: Enforce physical-row exclusivity even in builds with assertions disabled.
 inline void activate(DRAMNode* bank, int view, int row) {
   assert(view == VIEW_A || view == VIEW_B);
+  if (row_open_in_other_view(bank, view, row)) {
+    throw std::logic_error("DDRAM-P: request row is open in other view");
+  }
   assert(!view_open(bank, view));
-  // View conflict: a row can only be open in ONE view
-  assert(!row_open_in_other_view(bank, view, row));
   bank->m_ddram_active_rows[view] = row;
 }
 

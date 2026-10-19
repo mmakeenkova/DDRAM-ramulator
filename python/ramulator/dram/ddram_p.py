@@ -148,6 +148,20 @@ class DDRAM_P(DDR5):
         ):
             extend_unique(constraint.preceding, ["ACT_A", "ACT_B"])
 
+        # DDRAM: View-local PRE replaces PREpb for shared precharge spacing and
+        # maintenance recovery. Keep PRE-to-ACT bank timing view-local below.
+        if constraint.level == "Rank" or maintenance_commands.intersection(
+            constraint.preceding + constraint.following
+        ):
+            if "PREpb" in constraint.preceding:
+                extend_unique(constraint.preceding, ["PRE_A", "PRE_B"])
+            if "PREpb" in constraint.following:
+                extend_unique(constraint.following, ["PRE_A", "PRE_B"])
+
+        # DDRAM: PREab closes both views and delays either view's next activation.
+        if "PREab" in constraint.preceding and "ACT" in constraint.following:
+            extend_unique(constraint.following, ["ACT_A", "ACT_B"])
+
     timing_constraints += [
         TimingConstraint(
             level="Bank",

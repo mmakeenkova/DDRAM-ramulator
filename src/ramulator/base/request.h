@@ -29,6 +29,9 @@ struct Request {
 
   int command = -1;        // Current command to issue to progress the request
   int final_command = -1;  // Terminal command needed to complete the request
+  // DDRAM: Tentative until the first issued prerequisite; copied with the request.
+  int selected_view = -1;
+  bool view_committed = false;
   bool is_stat_updated = false;
 
   Clk_t arrive = -1;  // Clock cycle when the request arrives at the memory controller

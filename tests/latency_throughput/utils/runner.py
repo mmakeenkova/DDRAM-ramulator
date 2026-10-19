@@ -5,10 +5,32 @@ including NOP-injected latency points and max-rate streaming-only points. It is
 a top-level function (not a closure) so it pickles for ProcessPoolExecutor.
 """
 
+import math
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tests.utils import extract_dram_layout
+
+
+# DDRAM: Restrict generated traffic without changing the modeled device organization.
+def traffic_layout(dram, cfg: dict) -> dict:
+    layout = extract_dram_layout(dram)
+    rows = cfg.get("traffic_rows", layout["num_rows"])
+    if not isinstance(rows, int) or not 1 <= rows <= layout["num_rows"]:
+        raise ValueError("traffic_rows must fit the device row count")
+    layout["num_rows"] = rows
+    counts = cfg.get("traffic_bank_counts", {})
+    levels = list(type(dram).levels)
+    available = {levels[position] for position in layout["bank_positions"]}
+    if counts.keys() - available:
+        raise ValueError("traffic_bank_counts must name bank-address levels")
+    for index, position in enumerate(layout["bank_positions"]):
+        count = counts.get(levels[position], layout["bank_counts"][index])
+        if not isinstance(count, int) or not 1 <= count <= layout["bank_counts"][index]:
+            raise ValueError("traffic_bank_counts must fit the device organization")
+        layout["bank_counts"][index] = count
+    layout["total_bank_units"] = math.prod(layout["bank_counts"])
+    return layout
 
 
 def run_single_config_point(
@@ -31,7 +53,7 @@ def run_single_config_point(
 
     dram_cls = getattr(ramulator.dram, cfg["dram_class"])
     dram = dram_cls(org_preset=cfg["org_preset"], timing_preset=cfg["timing_preset"])
-    layout = extract_dram_layout(dram)
+    layout = traffic_layout(dram, cfg)
     if stream_cls is None:
         stream_cls = cfg.get("stream_cls", layout["num_cls"])
     if latency_measure_mode is None:
@@ -107,29 +129,34 @@ def run_sweep(
 
     t_start = time.time()
     raw_results = {}
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(
-                run_single_config_point,
-                cfg,
-                nop_counter=nop,
-                read_ratio=rr,
-                num_probe_requests=num_probe_requests,
-                refresh_enabled=refresh_enabled,
-                frontend_clock_ratio=frontend_clock_ratio,
-                warmup_cycles=warmup_cycles,
-                latency_measure_mode=latency_measure_mode,
-                latency_sample_count=latency_sample_count,
-            ): (nop, rr)
-            for nop, rr in jobs
-        }
-        done = 0
-        for fut in as_completed(futures):
-            nop, rr = futures[fut]
-            raw_results[(nop, rr)] = fut.result()
-            done += 1
-            if done % 10 == 0 or done == total:
-                print(f"  [{cfg['name']}] {done}/{total} completed")
+    point_kwargs = dict(
+        num_probe_requests=num_probe_requests,
+        refresh_enabled=refresh_enabled,
+        frontend_clock_ratio=frontend_clock_ratio,
+        warmup_cycles=warmup_cycles,
+        latency_measure_mode=latency_measure_mode,
+        latency_sample_count=latency_sample_count,
+    )
+    # DDRAM: A serial mode also works in environments that restrict process-pool sockets.
+    if max_workers == 1:
+        for nop, rr in jobs:
+            raw_results[(nop, rr)] = run_single_config_point(
+                cfg, nop_counter=nop, read_ratio=rr, **point_kwargs
+            )
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(run_single_config_point, cfg, nop_counter=nop, read_ratio=rr,
+                            **point_kwargs): (nop, rr)
+                for nop, rr in jobs
+            }
+            done = 0
+            for fut in as_completed(futures):
+                nop, rr = futures[fut]
+                raw_results[(nop, rr)] = fut.result()
+                done += 1
+                if done % 10 == 0 or done == total:
+                    print(f"  [{cfg['name']}] {done}/{total} completed")
 
     elapsed = time.time() - t_start
     print(f"  [{cfg['name']}] All {total} runs done in {elapsed:.1f}s")

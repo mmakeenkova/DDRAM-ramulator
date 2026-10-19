@@ -14,7 +14,8 @@ class IScheduler {
   RAMULATOR_REGISTER_INTERFACE(IScheduler, "scheduler")
  public:
   // Contract:
-  //   - The scheduler derives req.command from req.final_command before
+  //   - DDRAM: The scheduler calls ControllerBase::prepare_request(), skipping
+  //     blocked requests, to derive req.command from req.final_command before
   //     invoking filter, so controller predicates can reason about the current
   //     command without mutating the request.
   //   - The filter is eligibility-only. It must not mutate controller state.

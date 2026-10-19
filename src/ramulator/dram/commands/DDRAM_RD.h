@@ -2,6 +2,7 @@
 
 #include "ramulator/dram/node.h"
 #include "ramulator/dram/ddram/bank_state.h"
+#include <stdexcept>
 
 namespace Ramulator::Cmd {
 
@@ -10,8 +11,13 @@ struct DDRAM_RD {
     static constexpr DRAMCommandMeta meta = {.is_accessing = true};
     static constexpr BankTarget bank_target = BankTarget::Single;
 
+    // DDRAM: Reads and writes must use the view already holding the physical row.
     static int preq(DRAMNode* bank, int cmd, const AddrVec_t& addr_vec, Clk_t clk) {
         const int row = addr_vec[T::Level::Row];
+        if (DDRAM::row_open_in_other_view(bank, View, row)) {
+            throw std::logic_error("DDRAM-P: request row is open in other view");
+        }
+
         // The requested row is already open in this view.
         if (DDRAM::row_hit(bank, View, row)) {
             return cmd;

@@ -2,6 +2,8 @@ import ramulator
 from tests.device_timings.harness import DeviceUnderTest
 import pytest
 
+pytestmark = [pytest.mark.device_timings, pytest.mark.ddram_p]
+
 # helper
 def make_two_view_dut():
     dram = ramulator.dram.DDRAM_P(
@@ -37,7 +39,9 @@ def test_ddram_p_views():
     # open row 10 in view A
     dut.issue("ACT_A", row10, clk=0)
     assert dut.probe("RD_A", row10, clk=1).row_hit
-    assert not dut.probe("RD_B", row10, clk=1).row_hit
+    # DDRAM: A command naming the other view is an invalid assignment.
+    with pytest.raises(RuntimeError, match="other view"):
+        dut.probe("RD_B", row10, clk=1)
 
     # open row 20 in view B without closing row A
     dut.issue("ACT_B", row20, clk=1000)
@@ -760,3 +764,37 @@ def test_ddram_p_preab_cross_bank_write_recovery():
 
     # PREab is addressed through a different bank
     assert not dut.probe("PREab", bg0_bank0, clk=210).ready
+
+
+# DDRAM: The physical-row invariant is symmetric and applies before any PRE/ACT.
+@pytest.mark.parametrize("source,target", [("A", "B"), ("B", "A")])
+@pytest.mark.parametrize("target_occupied", [False, True])
+@pytest.mark.parametrize("operation", ["ACT", "RD", "WR"])
+def test_ddram_p_rejects_same_row_in_other_view(source, target, target_occupied, operation):
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8", timing_preset="DDR5_3200AN", rank=1
+    )
+    dut = DeviceUnderTest(dram)
+    row = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=10, Column=0)
+    other = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=20, Column=0)
+    dut.issue(f"ACT_{source}", row, clk=0)
+    if target_occupied:
+        dut.issue(f"ACT_{target}", other, clk=100)
+
+    with pytest.raises(RuntimeError, match="other view"):
+        dut.probe(f"{operation}_{target}", row, clk=1000)
+    with pytest.raises(RuntimeError, match="other view"):
+        dut.issue(f"{operation}_{target}", row, clk=1000)
+
+    assert dut.probe(f"RD_{source}", row, clk=1001).row_hit
+    if target_occupied:
+        assert dut.probe(f"RD_{target}", other, clk=1001).row_hit
+        dut.issue(f"PRE_{target}", other, clk=1100)
+    else:
+        assert not dut.probe(f"RD_{target}", other, clk=1001).row_open
+
+    # Once the source is closed, the same physical row may move to the other view.
+    dut.issue(f"PRE_{source}", row, clk=1200)
+    dut.issue(f"ACT_{target}", row, clk=1400)
+    assert dut.probe(f"RD_{target}", row, clk=1500).row_hit
+    assert not dut.probe(f"RD_{source}", other, clk=1500).row_open

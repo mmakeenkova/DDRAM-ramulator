@@ -6,9 +6,13 @@ target_sources(
   controller_base.h
   controller_base.cpp
 
+  view_selection/i_view_selection.h
+  view_selection/ddram_view_selection.cpp
+
   scheduler/i_scheduler.h
   scheduler/impl/frfcfs.cpp
   scheduler/impl/frfcfs_rowhit.cpp
+  scheduler/impl/frfcfs_view_aware.cpp
 
   refresh/i_refresh_manager.h
   refresh/impl/all_bank.cpp

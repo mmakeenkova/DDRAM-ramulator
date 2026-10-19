@@ -28,6 +28,63 @@ int ControllerBase::get_preq_command(int command, const AddrVec_t& addr_vec) {
   return m_device.get_preq_command(command, addr_vec, m_clk);
 }
 
+// DDRAM: Central request-aware preparation keeps protocol choices out of schedulers.
+// A failed preparation must never reach a command filter or timing lookup.
+bool ControllerBase::prepare_request(Request& req) {
+  req.command = -1;
+  if (m_view_selection && !m_view_selection->prepare(req)) {
+    return false;
+  }
+  req.command = get_preq_command(req.final_command, req.addr_vec);
+  return true;
+}
+
+// DDRAM: Share closure overlap between row-hit scheduling and active-request protection.
+bool ControllerBase::command_closes_rowbuffer(const Request& closing, const Request& victim) const {
+  if (!m_device.m_spec->command_meta[closing.command].is_closing) {
+    return false;
+  }
+  if (m_view_selection && !m_view_selection->closes_view(closing.command, victim.selected_view)) {
+    return false;
+  }
+  const int bank_id = m_device.get_flat_bank_id(victim.addr_vec);
+  if (m_device.m_spec->bank_targets[closing.command] == BankTarget::Single) {
+    return m_device.get_flat_bank_id(closing.addr_vec) == bank_id;
+  }
+  bool overlaps = false;
+  m_device.for_each_target_bank_while(closing.command, closing.addr_vec, [&](int target) {
+    overlaps = target == bank_id;
+    return !overlaps;
+  });
+  return overlaps;
+}
+
+// DDRAM: Conventional devices retain the original command-only behavior.
+void ControllerBase::init_view_selection(const std::string& policy) {
+  if (policy != "Auto" && policy != "AlwaysA" && policy != "TwoView") {
+    throw std::runtime_error("Unknown view_selection policy: " + policy + "; expected Auto, AlwaysA, or TwoView");
+  }
+  if (m_device.m_spec->standard_name != "DDRAM_P") {
+    if (policy != "Auto") {
+      throw std::runtime_error("Explicit view_selection requires DDRAM_P");
+    }
+    return;
+  }
+  if (m_config["row_policy"]["impl"].as<std::string>() != "Open") {
+    throw std::runtime_error("DDRAM-P currently requires the Open row policy; view-aware closure is not implemented");
+  }
+  m_view_selection = make_ddram_view_selection(m_device, policy == "AlwaysA");
+  // DDRAM: AlwaysA has the same active capacity as DDR5; TwoView permits two owners.
+  m_active_buffer.max_size = (policy == "AlwaysA" ? 1 : 2) * m_device.m_bank_nodes.size();
+}
+
+// DDRAM: Issue is the commitment boundary, even when the command is a precharge.
+void ControllerBase::on_request_issued(Request& req) {
+  if (m_view_selection) {
+    m_view_selection->on_issue(req);
+  }
+}
+
 int ControllerBase::get_tx_bytes() const {
   return m_device.m_spec->get_tx_bytes();
 }
@@ -138,6 +195,9 @@ bool ControllerBase::send(Request& req) {
   req.addr_vec[0] = m_channel_id;
 
   req.final_command = m_device.m_spec->supported_requests[req.type_id];
+  // DDRAM: A fresh submission has no controller-owned assignment.
+  req.selected_view = -1;
+  req.view_committed = false;
 
   // Forward existing write requests to incoming read requests
   if (req.type_id == Request::Type::Read) {
@@ -220,6 +280,10 @@ void ControllerBase::tick_prologue() {
 // ── Request lifecycle ────────────────────────────────────────────────────
 
 void ControllerBase::retire_request(ReqBuffer::iterator& req_it, ReqBuffer& buffer) {
+  // DDRAM: Release before callbacks and removal; promotion preserves ownership.
+  if (m_view_selection) {
+    m_view_selection->on_retire(*req_it);
+  }
   if (&buffer == &m_active_buffer) {
     m_active_per_bank[m_device.get_flat_bank_id(req_it->addr_vec)]--;
   }
@@ -285,7 +349,9 @@ ControllerBase::Candidate ControllerBase::pick_priority_if(RequestFilterRef filt
   }
 
   auto it = m_priority_buffer.begin();
-  it->command = get_preq_command(it->final_command, it->addr_vec);
+  if (!prepare_request(*it)) {
+    return c;
+  }
   if (!check_timing(it->command, it->addr_vec)) {
     return c;
   }
@@ -305,12 +371,22 @@ ControllerBase::Candidate ControllerBase::pick_priority_if(RequestFilterRef filt
 ControllerBase::Candidate ControllerBase::pick_rw_if(RequestFilterRef filter) {
   set_write_mode();
   auto& buffer = m_is_write_mode ? m_write_buffer : m_read_buffer;
-  return pick_best_ready_from(buffer, [&](const Request& req) {
+  auto eligible = [&](const Request& req) {
     if (would_close_active(req)) {
       return false;
     }
     return !filter || filter(req);
-  });
+  };
+  Candidate c = pick_best_ready_from(buffer, eligible);
+  if (!c.valid && m_view_selection && m_view_selection->uses_reservations()) {
+    // DDRAM: A PRE owner stays in its source queue until ACT. If read/write mode
+    // switches, blocked followers must not prevent that owner from progressing.
+    auto& other = m_is_write_mode ? m_read_buffer : m_write_buffer;
+    c = pick_best_ready_from(other, [&](const Request& req) {
+      return req.view_committed && eligible(req);
+    });
+  }
+  return c;
 }
 
 bool ControllerBase::would_close_active(const Request& req) const {
@@ -318,6 +394,17 @@ bool ControllerBase::would_close_active(const Request& req) const {
     return false;
   }
   if (m_active_buffer.size() == 0) {
+    return false;
+  }
+
+  // DDRAM: Keep another view's activation-to-access sequence independent of this close.
+  // Bank-wide maintenance still waits for every active owner in its targeted banks.
+  if (m_view_selection) {
+    for (const auto& active : m_active_buffer.buffer) {
+      if (command_closes_rowbuffer(req, active)) {
+        return true;
+      }
+    }
     return false;
   }
 

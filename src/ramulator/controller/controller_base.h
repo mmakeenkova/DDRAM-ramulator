@@ -11,6 +11,7 @@
 #include "ramulator/controller/plugin/i_controller_plugin.h"
 #include "ramulator/controller/scheduler/i_scheduler.h"
 #include "ramulator/dram/device.h"
+#include "ramulator/controller/view_selection/i_view_selection.h"
 
 namespace Ramulator {
 
@@ -30,6 +31,12 @@ class ControllerBase : public IController, public Implementation {
   // Forwarding methods — bind m_clk for sub-components
   bool check_timing(int command, const AddrVec_t& addr_vec);
   int get_preq_command(int command, const AddrVec_t& addr_vec);
+
+  // DDRAM: Prepare the effective terminal command before prerequisites and filters.
+  bool prepare_request(Request& req);
+
+  // DDRAM: Query physical bank scope and view scope without scheduler-specific command IDs.
+  bool command_closes_rowbuffer(const Request& closing, const Request& victim) const;
 
   // IController overrides
   void set_channel_id(int channel_id) override;
@@ -54,6 +61,12 @@ class ControllerBase : public IController, public Implementation {
 
   // Shared stats registration — call from subclass setup()
   void setup_base(IFrontEnd* frontend, IMemorySystem* memory_system);
+
+  // DDRAM: Enable view selection only for GenericDDR with DDRAM_P.
+  void init_view_selection(const std::string& policy);
+  // DDRAM: Commit only after actual device issue, before active-buffer copying.
+  void on_request_issued(Request& req);
+  std::unique_ptr<IViewSelection> m_view_selection;
 
   // Sub-components
   IScheduler* m_scheduler = nullptr;
