@@ -48,6 +48,37 @@
             />
           </div>
         </div>
+
+        <div>
+          <p class="text-xs font-semibold text-zinc-300">
+            Command annotations
+          </p>
+          <p class="mt-1 text-xs text-zinc-500 leading-snug">
+            Add semantic borders without replacing the existing command colors.
+          </p>
+        </div>
+
+        <div class="rounded-lg bg-zinc-900/50 border border-zinc-800/80 divide-y divide-zinc-800/80">
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-zinc-200">Highlight row hits</p>
+              <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                Draws a dashed lime box around accesses that required no activation.
+              </p>
+            </div>
+            <USwitch v-model="highlightRowHits" aria-label="Highlight row-hit commands" />
+          </div>
+
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-zinc-200">Color borders by view</p>
+              <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                Cyan identifies view A and pink identifies view B, including internal refresh.
+              </p>
+            </div>
+            <USwitch v-model="colorByView" aria-label="Color command borders by DDRAM-P view" />
+          </div>
+        </div>
       </div>
     </template>
   </UPopover>
@@ -62,5 +93,15 @@ const tCKPs = computed(() => sessionStore.getTimingValue('tCK_ps'));
 const displayTimelineInNs = computed({
   get: () => uiStore.displayTimelineInNs,
   set: (value: boolean) => uiStore.setDisplayTimelineInNs(value),
+});
+
+const highlightRowHits = computed({
+  get: () => uiStore.highlightRowHits,
+  set: (value: boolean) => uiStore.setHighlightRowHits(value),
+});
+
+const colorByView = computed({
+  get: () => uiStore.colorByView,
+  set: (value: boolean) => uiStore.setColorByView(value),
 });
 </script>

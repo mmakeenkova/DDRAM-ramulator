@@ -5,6 +5,7 @@
 # Regenerate:   python -m ramulator codegen
 ###############################################################################
 from .closed_cap import ClosedCAP
+from .ddram_view_auto_precharge import DDRAMViewAutoPrecharge
 from .open import Open
 
-__all__ = ['ClosedCAP', 'Open']
+__all__ = ['ClosedCAP', 'DDRAMViewAutoPrecharge', 'Open']

@@ -59,10 +59,37 @@ bool ControllerBase::command_closes_rowbuffer(const Request& closing, const Requ
   return overlaps;
 }
 
+size_t ControllerBase::count_queued_row_requests(const Request& issuing) const {
+  if (issuing.addr_vec.empty() || m_row_level < 0) {
+    return 0;
+  }
+  const int bank_id = m_device.get_flat_bank_id(issuing.addr_vec);
+  const int row = issuing.addr_vec[m_row_level];
+  size_t count = 0;
+  auto count_buffer = [&](const ReqBuffer& buffer) {
+    for (const auto& req : buffer.buffer) {
+      if (req.request_id == issuing.request_id ||
+          (req.type_id != Request::Type::Read && req.type_id != Request::Type::Write) ||
+          req.addr_vec.empty()) {
+        continue;
+      }
+      if (m_device.get_flat_bank_id(req.addr_vec) == bank_id && req.addr_vec[m_row_level] == row) {
+        count++;
+      }
+    }
+  };
+  count_buffer(m_active_buffer);
+  count_buffer(m_read_buffer);
+  count_buffer(m_write_buffer);
+  return count;
+}
+
 // DDRAM: Conventional devices retain the original command-only behavior.
 void ControllerBase::init_view_selection(const std::string& policy) {
-  if (policy != "Auto" && policy != "AlwaysA" && policy != "TwoView") {
-    throw std::runtime_error("Unknown view_selection policy: " + policy + "; expected Auto, AlwaysA, or TwoView");
+  if (policy != "Auto" && policy != "AlwaysA" && policy != "TwoView" && policy != "QueueAware") {
+    throw std::runtime_error(
+        "Unknown view_selection policy: " + policy +
+        "; expected Auto, AlwaysA, TwoView, or QueueAware");
   }
   if (m_device.m_spec->standard_name != "DDRAM_P") {
     if (policy != "Auto") {
@@ -70,12 +97,30 @@ void ControllerBase::init_view_selection(const std::string& policy) {
     }
     return;
   }
-  if (m_config["row_policy"]["impl"].as<std::string>() != "Open") {
-    throw std::runtime_error("DDRAM-P currently requires the Open row policy; view-aware closure is not implemented");
+  const std::string row_policy = m_config["row_policy"]["impl"].as<std::string>();
+  if (row_policy != "Open" && row_policy != "DDRAMViewAutoPrecharge") {
+    throw std::runtime_error(
+        "DDRAM-P requires the Open or DDRAMViewAutoPrecharge row policy");
   }
-  m_view_selection = make_ddram_view_selection(m_device, policy == "AlwaysA");
-  // DDRAM: AlwaysA has the same active capacity as DDR5; TwoView permits two owners.
+  const std::string effective_policy = policy == "Auto" ? "TwoView" : policy;
+  m_view_selection = make_ddram_view_selection(m_device, effective_policy);
+  // DDRAM: AlwaysA has DDR5's active capacity; dual-view policies permit two owners.
   m_active_buffer.max_size = (policy == "AlwaysA" ? 1 : 2) * m_device.m_bank_nodes.size();
+}
+
+void ControllerBase::update_view_selection_context() {
+  if (!m_view_selection || !m_view_selection->uses_queue_state()) {
+    return;
+  }
+  std::vector<const Request*> requests;
+  requests.reserve(m_read_buffer.size() + m_write_buffer.size());
+  for (const auto& req : m_read_buffer.buffer) {
+    requests.push_back(&req);
+  }
+  for (const auto& req : m_write_buffer.buffer) {
+    requests.push_back(&req);
+  }
+  m_view_selection->update_queue_state(requests);
 }
 
 // DDRAM: Issue is the commitment boundary, even when the command is a precharge.
@@ -118,6 +163,7 @@ void ControllerBase::init_base() {
 
   // Cache frequently-used lookups
   m_bank_level = m_device.m_spec->get_level_id("Bank");
+  m_row_level = m_device.m_spec->get_level_id("Row");
   m_tCK_ps = m_device.m_spec->get_timing_value("tCK_ps");
 
   // Active buffer holds requests with in-flight opening commands (ACT).
@@ -383,6 +429,9 @@ ControllerBase::Candidate ControllerBase::pick_priority_if(RequestFilterRef filt
 }
 
 ControllerBase::Candidate ControllerBase::pick_rw_if(RequestFilterRef filter) {
+  // DDRAM: Snapshot both demand queues immediately before view-aware placement.
+  // Fixed and A-first policies skip this work through uses_queue_state().
+  update_view_selection_context();
   set_write_mode();
   auto& buffer = m_is_write_mode ? m_write_buffer : m_read_buffer;
   auto eligible = [&](const Request& req) {

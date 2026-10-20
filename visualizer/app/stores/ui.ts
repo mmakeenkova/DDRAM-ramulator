@@ -6,6 +6,8 @@ export type BusType = 'command' | 'data' | 'request' | 'tp_data' | 'tp_cmd';
 export type ViewMode = 'command' | 'request' | 'throughput';
 
 const TIMELINE_NS_STORAGE_KEY = 'ramulator2-visualizer-timeline-ns';
+const ROW_HIT_HIGHLIGHT_STORAGE_KEY = 'ramulator2-visualizer-highlight-row-hits';
+const VIEW_BORDER_STORAGE_KEY = 'ramulator2-visualizer-view-borders';
 
 export interface RowLayout {
   top: number;
@@ -26,6 +28,8 @@ export const useUIStore = defineStore('ui', {
     layoutVersion: 0,
     viewMode: 'command' as ViewMode,
     displayTimelineInNs: false,
+    highlightRowHits: true,
+    colorByView: false,
     /** After navigation, scroll the sidebar so this hierarchy row is centered (consumed in trace layout). */
     treeScrollTarget: null as null | { busType: BusType; path: number[] },
   }),
@@ -34,6 +38,9 @@ export const useUIStore = defineStore('ui', {
       if (!import.meta.client) return;
       try {
         this.displayTimelineInNs = localStorage.getItem(TIMELINE_NS_STORAGE_KEY) === 'true';
+        const rowHits = localStorage.getItem(ROW_HIT_HIGHLIGHT_STORAGE_KEY);
+        this.highlightRowHits = rowHits == null ? true : rowHits === 'true';
+        this.colorByView = localStorage.getItem(VIEW_BORDER_STORAGE_KEY) === 'true';
       } catch {
         /* ignore */
       }
@@ -43,6 +50,24 @@ export const useUIStore = defineStore('ui', {
       if (!import.meta.client) return;
       try {
         localStorage.setItem(TIMELINE_NS_STORAGE_KEY, String(value));
+      } catch {
+        /* ignore */
+      }
+    },
+    setHighlightRowHits(value: boolean) {
+      this.highlightRowHits = value;
+      if (!import.meta.client) return;
+      try {
+        localStorage.setItem(ROW_HIT_HIGHLIGHT_STORAGE_KEY, String(value));
+      } catch {
+        /* ignore */
+      }
+    },
+    setColorByView(value: boolean) {
+      this.colorByView = value;
+      if (!import.meta.client) return;
+      try {
+        localStorage.setItem(VIEW_BORDER_STORAGE_KEY, String(value));
       } catch {
         /* ignore */
       }

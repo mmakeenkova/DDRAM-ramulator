@@ -38,6 +38,11 @@ class ControllerBase : public IController, public Implementation {
   // DDRAM: Query physical bank scope and view scope without scheduler-specific command IDs.
   bool command_closes_rowbuffer(const Request& closing, const Request& victim) const;
 
+  // DDRAM: Read-only row-demand query for closure policies. The issuing
+  // request is excluded by stable request ID, and both read/write queues are
+  // considered independently of the controller's current drain mode.
+  size_t count_queued_row_requests(const Request& issuing) const;
+
   // IController overrides
   void set_channel_id(int channel_id) override;
   int get_tx_bytes() const override;
@@ -64,6 +69,8 @@ class ControllerBase : public IController, public Implementation {
 
   // DDRAM: Enable view selection only for GenericDDR with DDRAM_P.
   void init_view_selection(const std::string& policy);
+  // DDRAM: Give queue-aware policies one order-independent demand snapshot.
+  void update_view_selection_context();
   // DDRAM: Commit only after actual device issue, before active-buffer copying.
   void on_request_issued(Request& req);
   std::unique_ptr<IViewSelection> m_view_selection;
@@ -94,6 +101,7 @@ class ControllerBase : public IController, public Implementation {
 
   // Cached spec lookups
   int m_bank_level = -1;
+  int m_row_level = -1;
   int m_tCK_ps = -1;
 
   // Per flat-bank count of requests in m_active_buffer (typically 0 or 1).

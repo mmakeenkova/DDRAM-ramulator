@@ -2,6 +2,8 @@
 #define RAMULATOR_CONTROLLER_VIEW_SELECTION_I_VIEW_SELECTION_H
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "ramulator/base/request.h"
 #include "ramulator/dram/device.h"
@@ -16,8 +18,15 @@ class IViewSelection {
   virtual ~IViewSelection() = default;
   // DDRAM: Exclusive policies need owner-progress fallback across read/write queues.
   virtual bool uses_reservations() const = 0;
+  // DDRAM: Avoid queue snapshot overhead for policies that do not consume it.
+  virtual bool uses_queue_state() const {
+    return false;
+  }
   // DDRAM: Report whether a closing command affects a selected view; unknown views are conservative.
   virtual bool closes_view(int command, int view) const = 0;
+  // DDRAM: Refresh read-only queue-derived policy state before a scheduling pass.
+  virtual void update_queue_state(const std::vector<const Request*>& requests) {
+  }
   // DDRAM: Set the effective final command; return false when reservations block it.
   virtual bool prepare(Request& req) const = 0;
   // DDRAM: Commit the selected view after its first command successfully issues.
@@ -26,8 +35,8 @@ class IViewSelection {
   virtual void on_retire(const Request& req) = 0;
 };
 
-// DDRAM: Construct the deterministic policy, optionally restricting data requests to A.
-std::unique_ptr<IViewSelection> make_ddram_view_selection(DRAMDevice& device, bool always_a = false);
+// DDRAM: Construct the selected placement/replacement policy.
+std::unique_ptr<IViewSelection> make_ddram_view_selection(DRAMDevice& device, const std::string& policy);
 
 }  // namespace Ramulator
 

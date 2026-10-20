@@ -35,6 +35,14 @@ as `ACT A → ACT B delay · nRRDL = 8 cycles`. The ready-time marker separates
 the solid timing portion from any dashed scheduling/resource slack.
 The **Bottlenecks** popover ranks the strictest constraints across the trace.
 
+The **Row hits** popover reports the overall hit rate plus read/write and
+view-A/view-B breakdowns. Row-hit accesses have a dashed lime outline by
+default. In **Settings**, enable **Color borders by view** to add a cyan A or
+pink B outline without replacing the existing command/request colors; internal
+`IREF_A` and `IREF_B` events are included. These display preferences persist in
+the browser. When a same-lane dependency arrow is routed below its commands,
+its hover label is also placed below the arrow to avoid covering the bars.
+
 The visualizer requires Node.js 20+ and npm. On first use, the launcher installs
 the packages under `visualizer/node_modules`. A production build can instead be
 created with `cd visualizer && npm install && npm run build`.
@@ -143,3 +151,26 @@ Open the visualizer's **Compare** view and load `always_a.ch0.ram2bin` above
 for different startup or scheduling offsets, choose **Align commands** and click
 the corresponding command in each panel; that pair becomes the shared relative
 time origin.
+
+## Queue-aware replacement comparison
+
+Generate a short, deterministic comparison between A-first `TwoView` replacement
+and the queue-aware policy:
+
+```bash
+PYTHONPATH=python .venv/bin/python \
+  experiments/ddram_p_visualizer/queue_aware_comparison.py
+```
+
+This writes:
+
+```text
+output/ddram_p.view-two-view.ch0.ram2bin
+output/ddram_p.view-queue-aware.ch0.ram2bin
+```
+
+Both traces first open row 10 in A and row 20 in B, then issue a read miss for
+row 30 while two writes to row 10 are waiting. `TwoView` replaces A and later
+needs another `PRE`/`ACT` pair to reopen row 10. `QueueAware` replaces B and
+preserves the two `WR_A` row hits. Load the pair in **Trace comparison** and
+align the initial `RD_B` immediately before the traces diverge.

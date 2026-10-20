@@ -149,6 +149,12 @@ def parse_args() -> argparse.Namespace:
         help="Output directory; defaults to a directory named for the refresh parameters.",
     )
     parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help="Shared directory for bounded trace copies; defaults below the output directory.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Replace an existing completed result in the selected output directory.",
@@ -319,6 +325,8 @@ def main() -> None:
             "select another --output-dir or pass --overwrite"
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.input_dir is None:
+        args.input_dir = args.output_dir / "inputs"
 
     trace_paths = {}
     trace_records = {}
@@ -326,7 +334,7 @@ def main() -> None:
         source = (args.trace_root / workload).resolve()
         if not source.is_file():
             raise FileNotFoundError(f"MORDOR trace does not exist: {source}")
-        sliced = args.output_dir / "inputs" / f"{source.name}.first-{args.trace_lines}"
+        sliced = args.input_dir / f"{source.name}.first-{args.trace_lines}"
         trace_records[workload] = prepare_trace(source, sliced, args.trace_lines)
         trace_paths[workload] = str(sliced)
 
@@ -366,6 +374,7 @@ def main() -> None:
         "config_path": str(args.config_path) if args.config_path else None,
         "config": args.config_data,
         "trace_root": str(args.trace_root.resolve()),
+        "input_dir": str(args.input_dir.resolve()),
         "workloads": args.workloads,
         "trace_records": trace_records,
         "instructions": args.instructions,

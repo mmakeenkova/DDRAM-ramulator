@@ -38,6 +38,26 @@
           @click="sessionStore.resetColorPalette()"
         />
 
+        <div
+          v-if="(uiStore.viewMode === 'command' && uiStore.highlightRowHits) || uiStore.colorByView"
+          class="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-zinc-400 border-b border-zinc-800 pb-2"
+        >
+          <span v-if="uiStore.viewMode === 'command' && uiStore.highlightRowHits" class="inline-flex items-center gap-1.5">
+            <span class="size-3 border-2 border-dashed" :style="{ borderColor: ROW_HIT_BORDER_COLOR }" />
+            Row hit
+          </span>
+          <template v-if="uiStore.colorByView">
+            <span class="inline-flex items-center gap-1.5">
+              <span class="size-3 border-2" :style="{ borderColor: VIEW_BORDER_COLORS.A }" />
+              View A
+            </span>
+            <span class="inline-flex items-center gap-1.5">
+              <span class="size-3 border-2" :style="{ borderColor: VIEW_BORDER_COLORS.B }" />
+              View B
+            </span>
+          </template>
+        </div>
+
         <!-- Command view -->
         <template v-if="uiStore.viewMode === 'command'">
           <!-- <div class="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-zinc-400 border-b border-zinc-800 pb-2">
@@ -128,7 +148,7 @@
 
 <script setup lang="ts">
 import type { RequestTypeStoredColors } from '~/utils/commandColorStorage';
-import { CMD_PALETTE } from '~/utils/commandColors';
+import { ROW_HIT_BORDER_COLOR, VIEW_BORDER_COLORS } from '~/utils/eventSemantics';
 
 const sessionStore = useSessionStore();
 const uiStore = useUIStore();

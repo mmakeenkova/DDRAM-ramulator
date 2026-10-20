@@ -22,6 +22,8 @@
 #include "ramulator/dram/commands/PREpb.h"
 #include "ramulator/dram/commands/RD.h"
 #include "ramulator/dram/commands/RDA.h"
+#include "ramulator/dram/commands/RDA_A.h"
+#include "ramulator/dram/commands/RDA_B.h"
 #include "ramulator/dram/commands/RD_A.h"
 #include "ramulator/dram/commands/RD_B.h"
 #include "ramulator/dram/commands/REFab.h"
@@ -30,6 +32,8 @@
 #include "ramulator/dram/commands/RFMsb.h"
 #include "ramulator/dram/commands/WR.h"
 #include "ramulator/dram/commands/WRA.h"
+#include "ramulator/dram/commands/WRA_A.h"
+#include "ramulator/dram/commands/WRA_B.h"
 #include "ramulator/dram/commands/WR_A.h"
 #include "ramulator/dram/commands/WR_B.h"
 
@@ -41,7 +45,7 @@ class DDRAM_P : public DRAMSpec {
     enum : int { Channel, Rank, BankGroup, Bank, Row, Column, COUNT };
   };
   struct Command {
-    enum : int { ACT, PREpb, PREab, RD, WR, RDA, WRA, REFab, PREsb, REFsb, RFMab, RFMsb, ACT_A, ACT_B, PRE_A, PRE_B, RD_A, RD_B, WR_A, WR_B, IREF_A, IREF_B, ACT_NACK, COUNT };
+    enum : int { ACT, PREpb, PREab, RD, WR, RDA, WRA, REFab, PREsb, REFsb, RFMab, RFMsb, ACT_A, ACT_B, PRE_A, PRE_B, RD_A, RD_B, WR_A, WR_B, RDA_A, RDA_B, WRA_A, WRA_B, IREF_A, IREF_B, ACT_NACK, COUNT };
   };
   struct State {
     enum : int { Opened, Closed, N_A, COUNT };
@@ -58,7 +62,8 @@ class DDRAM_P : public DRAMSpec {
       Cmd::RDA<DDRAM_P>, Cmd::WRA<DDRAM_P>, Cmd::REFab<DDRAM_P>, Cmd::DDRAM_PREsb<DDRAM_P>, Cmd::REFsb<DDRAM_P>,
       Cmd::RFMab<DDRAM_P>, Cmd::RFMsb<DDRAM_P>, Cmd::ACT_A<DDRAM_P>, Cmd::ACT_B<DDRAM_P>, Cmd::PRE_A<DDRAM_P>,
       Cmd::PRE_B<DDRAM_P>, Cmd::RD_A<DDRAM_P>, Cmd::RD_B<DDRAM_P>, Cmd::WR_A<DDRAM_P>, Cmd::WR_B<DDRAM_P>,
-      Cmd::IREF_A<DDRAM_P>, Cmd::IREF_B<DDRAM_P>, Cmd::ACT_NACK<DDRAM_P>
+      Cmd::RDA_A<DDRAM_P>, Cmd::RDA_B<DDRAM_P>, Cmd::WRA_A<DDRAM_P>, Cmd::WRA_B<DDRAM_P>, Cmd::IREF_A<DDRAM_P>,
+      Cmd::IREF_B<DDRAM_P>, Cmd::ACT_NACK<DDRAM_P>
   >;
 
   DDRAM_P(const ConfigNode& config) {
@@ -70,7 +75,7 @@ class DDRAM_P : public DRAMSpec {
 
     // String name maps + reverse lookup vectors
     set_names(levels, level_names, {"Channel", "Rank", "BankGroup", "Bank", "Row", "Column"});
-    set_names(commands, command_names, {"ACT", "PREpb", "PREab", "RD", "WR", "RDA", "WRA", "REFab", "PREsb", "REFsb", "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B", "WR_A", "WR_B", "IREF_A", "IREF_B", "ACT_NACK"});
+    set_names(commands, command_names, {"ACT", "PREpb", "PREab", "RD", "WR", "RDA", "WRA", "REFab", "PREsb", "REFsb", "RFMab", "RFMsb", "ACT_A", "ACT_B", "PRE_A", "PRE_B", "RD_A", "RD_B", "WR_A", "WR_B", "RDA_A", "RDA_B", "WRA_A", "WRA_B", "IREF_A", "IREF_B", "ACT_NACK"});
     set_names(states, state_names, {"Opened", "Closed", "N_A"});
     set_names(timings, timing_names, {
         "rate", "nBL", "nCL", "nRCD", "nRP", "nRAS", "nRC", "nWR", "nRTP", "nCWL", "nPPD", "nCCDS", "nCCDL",

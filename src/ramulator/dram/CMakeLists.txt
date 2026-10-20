@@ -11,6 +11,8 @@ target_sources(
   commands/PREpb.h  commands/PREab.h  commands/PREsb.h
   commands/RD.h   commands/WR.h
   commands/RDA.h  commands/WRA.h
+  commands/DDRAM_RDA.h  commands/DDRAM_WRA.h
+  commands/RDA_A.h  commands/RDA_B.h  commands/WRA_A.h  commands/WRA_B.h
   commands/RD_S.h   commands/WR_S.h
   commands/RDA_S.h  commands/WRA_S.h
   commands/RD_L.h   commands/WR_L.h

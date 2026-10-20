@@ -42,6 +42,36 @@ The runner refuses to replace completed results unless `--overwrite` is given.
 Any command-line option can override the selected file for a deliberate variant;
 use a distinct `--output-dir` to retain both runs.
 
+### Complete 55-trace corpus
+
+`run_all.py` discovers every trace in the MORDOR directory and runs each one
+as an independently resumable unit. Select configurations explicitly:
+
+```bash
+PYTHONPATH=python .venv/bin/python experiments/ddram_p_refresh_sweep/run_all.py \
+  --configs mordor_10m_oracle mordor_10m_nack
+```
+
+Before launching the complete campaign, inspect the selection with:
+
+```bash
+PYTHONPATH=python .venv/bin/python experiments/ddram_p_refresh_sweep/run_all.py \
+  --configs mordor_10m_oracle mordor_10m_nack --dry-run
+```
+
+Results are stored per workload below `output/all/<config>/runs/`, with logs
+under `output/all/<config>/logs/`. Rerunning the same command skips completed
+and configuration-matching workloads, making interrupted studies resumable.
+Bounded trace copies are shared across configurations under `output/all/inputs/`
+to avoid duplicating the large MORDOR prefixes.
+The script also creates aggregate `measurements.csv`, `summary.csv`, and
+`results.json` files directly under `output/all/<config>/`, so those directories
+can be passed to `plot.py`. Use `--jobs N` for concurrent trace processes where
+the host permits it, `--traces ...` or `--limit N` for a subset, and
+`--overwrite` only when intentionally replacing completed per-trace results.
+The full 10M Oracle-plus-NACK campaign contains 440 simulations and can take
+several hours when run serially, so use `--dry-run` and a small `--limit` first.
+
 The defaults retire one million instructions and copy at most 250,000 records
 from each source trace. This bounds SimpleO3's input memory use without changing
 the original MORDOR files. Override the subset or run jobs in parallel with:

@@ -23,6 +23,7 @@ target_sources(
   rowpolicy/i_row_policy.h
   rowpolicy/impl/open.cpp
   rowpolicy/impl/closed_cap.cpp
+  rowpolicy/impl/ddram_view_auto_precharge.cpp
 
   addr_mapper/i_addr_mapper.h
   addr_mapper/addr_mapper_base.h

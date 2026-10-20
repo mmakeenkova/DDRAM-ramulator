@@ -145,6 +145,7 @@
           size="sm"
           to="/compare"
         />
+        <TraceRowHitStats class="tab-bar-action" />
         <TraceTimingBottlenecks class="tab-bar-action" />
         <TraceSettingsPopover class="tab-bar-action" />
         <TraceCommandColorLegend v-if="sessionStore.spec" class="tab-bar-action" />
@@ -255,6 +256,10 @@
             v-if="hoveredEvent.selectedView != null && hoveredEvent.selectedView >= 0"
             class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300"
           >VIEW {{ viewName(hoveredEvent.selectedView) }}</span>
+          <span
+            v-if="hoveredEvent.isRowHit"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-lime-400/70 bg-lime-400/10 text-lime-300"
+          >ROW HIT</span>
         </div>
 
         <div class="flex items-center gap-3 mt-1.5 text-xs font-mono">

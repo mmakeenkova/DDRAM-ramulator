@@ -9,6 +9,7 @@ import {
   type RequestTypeStoredColors,
 } from '~/utils/commandColorStorage';
 import { CMD_PALETTE, defaultCmdColor } from '~/utils/commandColors';
+import { analyzeRowHits, type RowHitSummary } from '~/utils/eventSemantics';
 
 export interface CommandColors {
   [cmdId: number]: string;
@@ -33,6 +34,9 @@ export const useSessionStore = defineStore('session', {
     commandColors: {} as CommandColors,
     /** Request view bar colors (Read / Write / Maintenance). */
     requestTypeColors: defaultRequestTypeColors(),
+    /** Per-event row-access classification and aggregate request-level hit statistics. */
+    rowHitClass: new Uint8Array(0),
+    rowHitSummary: null as RowHitSummary | null,
     /**
      * Per structural lane: number of stacked rows for overlapping requests (≥1).
      * Length = total lanes for structural depth; drives sidebar row min-height in request view.
@@ -82,6 +86,9 @@ export const useSessionStore = defineStore('session', {
       this.header = trace.header;
       this.spec = trace.spec;
       this.arrays = trace.arrays;
+      const rowHits = analyzeRowHits(trace);
+      this.rowHitClass = rowHits.classification;
+      this.rowHitSummary = rowHits.summary;
       if (!options?.streamingRefresh) {
         this.sessionGeneration++;
         this.commandColors = {};
@@ -185,6 +192,8 @@ export const useSessionStore = defineStore('session', {
       this.pendingTrace = null;
       this.commandColors = {};
       this.requestTypeColors = { ...defaultRequestTypeColors() };
+      this.rowHitClass = new Uint8Array(0);
+      this.rowHitSummary = null;
       this.requestLaneStackDepth = [];
       this.dataVersion = 0;
       this.sessionGeneration = 0;

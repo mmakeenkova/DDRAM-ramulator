@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--view-selection",
-        choices=("TwoView", "AlwaysA"),
+        choices=("TwoView", "QueueAware", "AlwaysA"),
         default="TwoView",
         help="DDRAM-P view-selection policy (default: TwoView).",
     )

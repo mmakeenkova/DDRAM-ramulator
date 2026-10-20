@@ -11,6 +11,12 @@ import {
 import { CMD_PALETTE, defaultCmdColor, hex2rgb, isWriteCommand } from '~/utils/commandColors';
 import type { RequestTypeStoredColors } from '~/utils/commandColorStorage';
 import { getEventTimingCauses, timingCauseDescription } from '~/utils/timingCauses';
+import {
+  eventView,
+  ROW_ACCESS_HIT,
+  ROW_HIT_BORDER_COLOR,
+  VIEW_BORDER_COLORS,
+} from '~/utils/eventSemantics';
 
 import StreamingWorker from '~/workers/streaming.worker.ts?worker';
 
@@ -354,6 +360,7 @@ export interface HitResult {
   constraintId?: number;
   constraintLevel?: number;
   isInternal?: boolean;
+  isRowHit?: boolean;
 }
 
 interface TimingEdgeHitRegion {
@@ -1128,13 +1135,14 @@ export function useRenderer(
         duration: dur,
         requestId: arrays.requestId[origIdx],
         finalCmdId: arrays.finalCmdId[origIdx],
-        selectedView: arrays.selectedView[origIdx],
+        selectedView: eventView(arrays, spec, origIdx),
         viewCommitted: arrays.viewCommitted[origIdx] !== 0,
         readyAt: arrays.readyAt[origIdx],
         causeEventId: arrays.causeEventId[origIdx],
         constraintId: arrays.constraintId[origIdx],
         constraintLevel: arrays.constraintLevel[origIdx],
         isInternal: spec.commandMeta[cid]?.isInternal ?? false,
+        isRowHit: sessionStore.rowHitClass[origIdx] === ROW_ACCESS_HIT,
       };
 
       if (busType === 'data') {
@@ -1192,7 +1200,7 @@ export function useRenderer(
         requestGroupIndex: j,
         requestId: arrays.requestId[origIdx],
         finalCmdId: arrays.finalCmdId[origIdx],
-        selectedView: arrays.selectedView[origIdx],
+        selectedView: eventView(arrays, sessionStore.spec!, origIdx),
         viewCommitted: arrays.viewCommitted[origIdx] !== 0,
       };
     }
@@ -1722,6 +1730,67 @@ export function useRenderer(
       ctx.shadowBlur = 0;
     };
 
+    // Semantic borders are drawn on the 2D overlay so they compose with the
+    // existing fill palette. Row hits use an outer dashed lime box; optional
+    // view coloring uses an inner solid A/B border and also recognizes IREF_A/B.
+    if (uiStore.viewMode === 'command' && cmdRelClk && cmdLaneIdx && cmdSwimlaneData && N > 0
+      && (uiStore.highlightRowHits || uiStore.colorByView)) {
+      const first = Math.max(0, bisectLeft(cmdRelClk, relStart - getMaxCommandDuration(spec), N));
+      const last = Math.min(N, bisectRight(cmdRelClk, relEnd, N));
+      if (last - first <= TIMING_EDGE_MAX_VISIBLE) {
+        ctx.save();
+        for (let i = first; i < last; i++) {
+          const isRowHit = uiStore.highlightRowHits
+            && sessionStore.rowHitClass[i] === ROW_ACCESS_HIT;
+          const view = uiStore.colorByView ? eventView(arrays, spec, i) : -1;
+          if (!isRowHit && view < 0) continue;
+
+          const x = ((Number(arrays.clk[i]!) - viewState.start) / vw) * el.width;
+          const width = Math.max(2, getCommandDuration(spec, arrays.cmdId[i]!) * pxPerCycle);
+          const y = cmdSwimlaneData[cmdLaneIdx[i]! * 4]!;
+
+          if (isRowHit) {
+            ctx.strokeStyle = ROW_HIT_BORDER_COLOR;
+            ctx.globalAlpha = 0.95;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([3, 2]);
+            ctx.strokeRect(x - 2, y - ROW_HEIGHT / 2 - 2, width + 4, ROW_HEIGHT + 4);
+          }
+          if (view === 0 || view === 1) {
+            ctx.strokeStyle = view === 0 ? VIEW_BORDER_COLORS.A : VIEW_BORDER_COLORS.B;
+            ctx.globalAlpha = 0.95;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([]);
+            ctx.strokeRect(x + 0.75, y - ROW_HEIGHT / 2 + 0.75,
+              Math.max(0.5, width - 1.5), ROW_HEIGHT - 1.5);
+          }
+        }
+        ctx.restore();
+      }
+    } else if (uiStore.viewMode === 'request' && uiStore.colorByView
+      && reqData && reqSwimlaneData && reqData.count > 0) {
+      const first = Math.max(0, bisectLeft(reqData.relClk, relStart - reqData.maxDuration, reqData.count));
+      const last = Math.min(reqData.count, bisectRight(reqData.relClk, relEnd, reqData.count));
+      if (last - first <= TIMING_EDGE_MAX_VISIBLE) {
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        for (let j = first; j < last; j++) {
+          const originalIndex = reqData.representativeIdx[j]!;
+          const view = eventView(arrays, spec, originalIndex);
+          if (view !== 0 && view !== 1) continue;
+          const x = ((referenceTime + reqData.relClk[j]! - viewState.start) / vw) * el.width;
+          const width = Math.max(2, reqData.duration[j]! * pxPerCycle);
+          const y = reqSwimlaneData[reqData.slotId[j]! * 4]!;
+          ctx.strokeStyle = view === 0 ? VIEW_BORDER_COLORS.A : VIEW_BORDER_COLORS.B;
+          ctx.strokeRect(x + 0.75, y - ROW_HEIGHT / 2 + 0.75,
+            Math.max(0.5, width - 1.5), ROW_HEIGHT - 1.5);
+        }
+        ctx.restore();
+      }
+    }
+
     // Persistent relationship layer: restrained arrows for every timing edge whose
     // dependent command is visible. Hovering either the arrow or command promotes it.
     if (uiStore.viewMode === 'command' && cmdRelClk && cmdLaneIdx && cmdSwimlaneData && N > 0) {
@@ -1927,12 +1996,15 @@ export function useRenderer(
             ctx.globalAlpha = 0.9;
             ctx.font = '9px ui-monospace, JetBrains Mono, monospace';
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
+            const labelBelow = sameLane && trackSign > 0;
+            ctx.textBaseline = labelBelow ? 'top' : 'bottom';
             ctx.fillStyle = cause.color;
             ctx.fillText(
               label,
               (sourceX + targetX) / 2,
-              sameLane ? trackY - 2 : Math.min(sourceBarEdgeY, targetBarEdgeY) - 4 - causeIndex * 10,
+              sameLane
+                ? trackY + (labelBelow ? 2 : -2)
+                : Math.min(sourceBarEdgeY, targetBarEdgeY) - 4 - causeIndex * 10,
             );
           }
         });
@@ -2142,12 +2214,14 @@ export function useRenderer(
       duration: getCommandDuration(spec, arrays.cmdId[bestTarget]!),
       requestId: arrays.requestId[bestTarget],
       finalCmdId: arrays.finalCmdId[bestTarget],
-      selectedView: arrays.selectedView[bestTarget],
+      selectedView: eventView(arrays, spec, bestTarget),
       viewCommitted: arrays.viewCommitted[bestTarget] !== 0,
       readyAt: arrays.readyAt[bestTarget],
       causeEventId: arrays.causeEventId[bestTarget],
       constraintId: arrays.constraintId[bestTarget],
       constraintLevel: arrays.constraintLevel[bestTarget],
+      isInternal: spec.commandMeta[arrays.cmdId[bestTarget]!]?.isInternal ?? false,
+      isRowHit: sessionStore.rowHitClass[bestTarget] === ROW_ACCESS_HIT,
     };
   }
 

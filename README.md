@@ -733,7 +733,8 @@ The canonical full controller example lives in:
 For DDRAM-P, `GenericDDR` accepts `view_selection="AlwaysA"` to compare the
 single-view integration with DDR5. The default `"Auto"` uses the existing path for
 conventional devices and selects `"TwoView"` for DDRAM-P. Explicit `"AlwaysA"` and
-`"TwoView"` require DDRAM-P; both currently require the `Open` row policy.
+`"TwoView"` or `"QueueAware"` require DDRAM-P; all currently require the `Open`
+row policy.
 
 ```python
 dram = ramulator.dram.DDRAM_P(
@@ -746,6 +747,10 @@ dut = cs.ControllerUnderTest.make_generic_ddr(dram, view_selection="AlwaysA")
 scheduler. It needs no exclusive view reservations. `TwoView` reserves a chosen
 view and target row from the first issued prerequisite through the terminal
 command, preventing competing assignments from changing placement mid-request.
+`QueueAware` uses the same reservation and commitment rules as `TwoView`, but
+when both views are occupied it preserves the open row with more requests in the
+combined read/write queues. Equal demand retains the deterministic A-first
+replacement used by `TwoView`.
 
 The comparison suite checks normalized command traces, issue cycles, per-request
 callback cycles, controller statistics, and A-only timing constraints at 3200,
@@ -755,8 +760,8 @@ callback cycles, controller statistics, and A-only timing constraints at 3200,
 PYTHONPATH=python pytest tests/controller_scheduling/GenericDDRController/test_ddram_p_always_a.py -q
 ```
 
-Use `FRFCFSViewAware` with `TwoView` to protect queued hits independently in each
-view:
+Use `FRFCFSViewAware` with `TwoView` or `QueueAware` to protect queued hits
+independently in each view:
 
 ```python
 dut = cs.ControllerUnderTest.make_generic_ddr(

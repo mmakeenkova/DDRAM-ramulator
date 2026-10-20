@@ -212,6 +212,7 @@ def test_a_only_timing_constraints_match_ddr5(preset):
     (ramulator.dram.DDRAM_P, "Unknown", "Unknown view_selection"),
     (ramulator.dram.DDR5, "AlwaysA", "requires DDRAM_P"),
     (ramulator.dram.DDR5, "TwoView", "requires DDRAM_P"),
+    (ramulator.dram.DDR5, "QueueAware", "requires DDRAM_P"),
 ])
 def test_invalid_view_selection(dram_cls, policy, message):
     with pytest.raises(RuntimeError, match=message):
@@ -222,7 +223,7 @@ def test_invalid_view_selection(dram_cls, policy, message):
 
 
 # DDRAM: Both default Auto and explicit TwoView retain the existing dual-view behavior.
-@pytest.mark.parametrize("policy", ["Auto", "TwoView"])
+@pytest.mark.parametrize("policy", ["Auto", "TwoView", "QueueAware"])
 def test_two_view_policy_remains_available(policy):
     dut = cs.ControllerUnderTest.make_generic_ddr(
         ramulator.dram.DDRAM_P(org_preset="DDR5_16Gb_x8", timing_preset="DDR5_3200AN"),
