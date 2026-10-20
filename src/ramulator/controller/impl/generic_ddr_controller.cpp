@@ -26,6 +26,7 @@ class GenericDDRController : public ControllerBase {
     int managed_refresh_ari;
     int managed_refresh_nack_latency;
     int managed_refresh_max_pending;
+    bool managed_refresh_preserve_open_rows;
     RAMULATOR_PARSE_PARAM(managed_refresh_mode, std::string, "dram_managed_refresh").default_val("Disabled");
     RAMULATOR_PARSE_PARAM(managed_refresh_interval, int, "dram_refresh_interval").default_val(-1);
     RAMULATOR_PARSE_PARAM(managed_refresh_duration, int, "dram_refresh_duration").default_val(-1);
@@ -35,6 +36,13 @@ class GenericDDRController : public ControllerBase {
     RAMULATOR_PARSE_PARAM(managed_refresh_ari, int, "dram_refresh_ari").default_val(1);
     RAMULATOR_PARSE_PARAM(managed_refresh_nack_latency, int, "dram_refresh_nack_latency").default_val(1);
     RAMULATOR_PARSE_PARAM(managed_refresh_max_pending, int, "dram_refresh_max_pending").default_val(8);
+    RAMULATOR_PARSE_PARAM(managed_refresh_preserve_open_rows, bool, "dram_refresh_preserve_open_rows").default_val(false);
+    if (managed_refresh_preserve_open_rows &&
+        (managed_refresh_mode == "Disabled" || managed_refresh_mode == "Off")) {
+      throw std::runtime_error(
+          "dram_refresh_preserve_open_rows is a counterfactual managed-refresh control; "
+          "it requires Oracle or Nack mode");
+    }
     if (managed_refresh_mode != "Disabled" && managed_refresh_mode != "Off" &&
         m_config["refresh_manager"]["impl"].as<std::string>() != "NoRefresh") {
       throw std::runtime_error("DRAM-managed refresh must be used with refresh_manager=NoRefresh");
@@ -56,7 +64,8 @@ class GenericDDRController : public ControllerBase {
         managed_refresh_view_count,
         managed_refresh_ari,
         managed_refresh_nack_latency,
-        managed_refresh_max_pending);
+        managed_refresh_max_pending,
+        managed_refresh_preserve_open_rows);
   }
   void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
     setup_base(frontend, memory_system);

@@ -127,11 +127,30 @@ output/ddram_p_refresh_comparison.png
 output/ddram_p_refresh_comparison.pdf
 ```
 
-The left panel reports the completion-cycle reduction from using two views,
-including the no-refresh control. The right panel reports refresh-on overhead
+The upper panel reports the completion-cycle reduction from using two views,
+including the no-refresh control. The lower panel reports refresh-on overhead
 relative to the matching refresh-off configuration. Negative overhead is shown
-below the red zero line rather than clipped. Use `--oracle-dir`, `--nack-dir`,
-`--output`, and `--formats` to plot other sweeps.
+below the red zero line rather than clipped. The figure width scales with the
+number of workloads so full-corpus labels remain readable.
+
+The plotting command also writes `<output>_rbmpki_boxplot.{png,pdf}`,
+`<output>_rbmpki_groups.txt`, and `<output>_numeric_results.md`. RBMPKI is computed from the one-view/no-refresh
+baseline as `(row_misses + row_conflicts) * 1000 / retired instructions`.
+Workloads sorted by this value are divided into equal-count low, medium, and
+high terciles. The box plot shows the four refresh-overhead distributions for
+each tercile, marking arithmetic means with diamonds and overheads derived from
+geometric-mean refresh/no-refresh cycle ratios with X markers. The text file
+records the definition, group ranges, members, RBMPKI values, and mean
+overheads. Use `--oracle-dir`, `--nack-dir`, `--output`, and `--formats` to plot
+other sweeps.
+
+The Markdown numeric report records the raw execution-cycle count for every
+configuration, every per-workload reduction or overhead value used by the
+figures, and all-workload arithmetic-mean and cycle-ratio-geomean summaries.
+
+All series use the shared contrasting palette and semantic assignments in
+[`../figure_palette.toml`](../figure_palette.toml); new experiment figures
+should use the same mapping.
 
 For example, plot the named 10-million-instruction pair without replacing the
 1-million-instruction figure:

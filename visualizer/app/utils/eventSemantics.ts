@@ -10,6 +10,17 @@ export const VIEW_BORDER_COLORS = {
 } as const;
 
 export const ROW_HIT_BORDER_COLOR = '#a3e635';
+export const AUTO_PRECHARGE_RECOVERY_COLOR = '#a1a1aa';
+export const AUTO_PRECHARGE_COLOR = '#fb923c';
+
+export interface AutoPrechargePhases {
+  view: 0 | 1;
+  operation: 'read' | 'write';
+  recoveryLabel: string;
+  recoveryCycles: number;
+  prechargeCycles: number;
+  totalCycles: number;
+}
 
 export interface RowHitBucket {
   accesses: number;
@@ -57,6 +68,51 @@ export function eventView(arrays: TraceArrays, spec: TraceSpec, index: number): 
   if (/(?:^|_)A$/.test(name)) return 0;
   if (/(?:^|_)B$/.test(name)) return 1;
   return -1;
+}
+
+function timingValue(spec: TraceSpec, name: string): number | null {
+  const index = spec.timingNames.indexOf(name);
+  return index >= 0 ? spec.timingValues[index] ?? null : null;
+}
+
+/** Decode the internal recovery and nRP phases carried by DDRAM-P RDA/WRA. */
+export function autoPrechargePhases(
+  spec: TraceSpec,
+  commandId: number,
+): AutoPrechargePhases | null {
+  const name = spec.commandNames[commandId]?.toUpperCase() ?? '';
+  const match = /^(RDA|WRA)_([AB])$/.exec(name);
+  if (!match) return null;
+
+  const nRP = timingValue(spec, 'nRP');
+  if (nRP == null) return null;
+  const view = match[2] === 'A' ? 0 : 1;
+  if (match[1] === 'RDA') {
+    const nRTP = timingValue(spec, 'nRTP');
+    if (nRTP == null) return null;
+    return {
+      view,
+      operation: 'read',
+      recoveryLabel: 'nRTP',
+      recoveryCycles: nRTP,
+      prechargeCycles: nRP,
+      totalCycles: nRTP + nRP,
+    };
+  }
+
+  const nCWL = timingValue(spec, 'nCWL');
+  const nBL = timingValue(spec, 'nBL');
+  const nWR = timingValue(spec, 'nWR');
+  if (nCWL == null || nBL == null || nWR == null) return null;
+  const recoveryCycles = nCWL + nBL + nWR;
+  return {
+    view,
+    operation: 'write',
+    recoveryLabel: 'nCWL + nBL + nWR',
+    recoveryCycles,
+    prechargeCycles: nRP,
+    totalCycles: recoveryCycles + nRP,
+  };
 }
 
 /**

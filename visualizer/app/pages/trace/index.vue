@@ -260,6 +260,10 @@
             v-if="hoveredEvent.isRowHit"
             class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-lime-400/70 bg-lime-400/10 text-lime-300"
           >ROW HIT</span>
+          <span
+            v-if="hoveredAutoPrecharge"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-orange-400/60 bg-orange-400/10 text-orange-300"
+          >AUTO-PRECHARGE</span>
         </div>
 
         <div class="flex items-center gap-3 mt-1.5 text-xs font-mono">
@@ -275,6 +279,23 @@
             <span class="text-zinc-500">final</span> {{ sessionStore.getCommandName(hoveredEvent.finalCmdId) }}
           </span>
           <span v-if="hoveredEvent.viewCommitted" class="ml-2 text-amber-300">committed</span>
+        </div>
+        <div v-if="hoveredAutoPrecharge" class="mt-2 pt-1.5 border-t border-zinc-700/50 text-xs font-mono">
+          <div>
+            <span class="text-zinc-500">recovery</span>
+            {{ hoveredAutoPrecharge.recoveryLabel }} = {{ hoveredAutoPrecharge.recoveryCycles }} cyc
+          </div>
+          <div>
+            <span class="text-zinc-500">internal precharge</span>
+            nRP = {{ hoveredAutoPrecharge.prechargeCycles }} cyc
+          </div>
+          <div>
+            <span class="text-zinc-500">view {{ viewName(hoveredAutoPrecharge.view) }} reusable</span>
+            {{ hoveredAutoPrecharge.readyClk }} clk
+          </div>
+          <div class="mt-1 text-[10px] text-zinc-500">
+            Combined with this command; no separate PRE is issued.
+          </div>
         </div>
         <div v-if="hoveredTiming" class="mt-2 pt-1.5 border-t border-zinc-700/50 text-xs font-mono">
           <div>
@@ -328,6 +349,7 @@
 
 <script setup lang="ts">
 import { getEventTimingCauses, timingCauseDescription } from '~/utils/timingCauses';
+import { autoPrechargePhases } from '~/utils/eventSemantics';
 import { isCompareHostMessage, type ComparePanelId, type ComparePanelMessage } from '~/utils/compareProtocol';
 import type { HitResult } from '~/composables/useRenderer';
 
@@ -425,6 +447,16 @@ const hoveredTiming = computed(() => {
         }))
       : [],
   };
+});
+
+const hoveredAutoPrecharge = computed(() => {
+  const event = hoveredEvent.value;
+  const spec = sessionStore.spec;
+  if (!event || !spec || event.bus !== 'command') return null;
+  const phases = autoPrechargePhases(spec, event.cmdId);
+  return phases
+    ? { ...phases, readyClk: event.clk + BigInt(phases.totalCycles) }
+    : null;
 });
 
 const tooltipStyle = computed(() => {

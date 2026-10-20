@@ -8,6 +8,7 @@ export type ViewMode = 'command' | 'request' | 'throughput';
 const TIMELINE_NS_STORAGE_KEY = 'ramulator2-visualizer-timeline-ns';
 const ROW_HIT_HIGHLIGHT_STORAGE_KEY = 'ramulator2-visualizer-highlight-row-hits';
 const VIEW_BORDER_STORAGE_KEY = 'ramulator2-visualizer-view-borders';
+const AUTO_PRECHARGE_STORAGE_KEY = 'ramulator2-visualizer-auto-precharge';
 
 export interface RowLayout {
   top: number;
@@ -30,6 +31,7 @@ export const useUIStore = defineStore('ui', {
     displayTimelineInNs: false,
     highlightRowHits: true,
     colorByView: false,
+    showAutoPrecharge: true,
     /** After navigation, scroll the sidebar so this hierarchy row is centered (consumed in trace layout). */
     treeScrollTarget: null as null | { busType: BusType; path: number[] },
   }),
@@ -41,6 +43,8 @@ export const useUIStore = defineStore('ui', {
         const rowHits = localStorage.getItem(ROW_HIT_HIGHLIGHT_STORAGE_KEY);
         this.highlightRowHits = rowHits == null ? true : rowHits === 'true';
         this.colorByView = localStorage.getItem(VIEW_BORDER_STORAGE_KEY) === 'true';
+        const autoPrecharge = localStorage.getItem(AUTO_PRECHARGE_STORAGE_KEY);
+        this.showAutoPrecharge = autoPrecharge == null ? true : autoPrecharge === 'true';
       } catch {
         /* ignore */
       }
@@ -68,6 +72,15 @@ export const useUIStore = defineStore('ui', {
       if (!import.meta.client) return;
       try {
         localStorage.setItem(VIEW_BORDER_STORAGE_KEY, String(value));
+      } catch {
+        /* ignore */
+      }
+    },
+    setShowAutoPrecharge(value: boolean) {
+      this.showAutoPrecharge = value;
+      if (!import.meta.client) return;
+      try {
+        localStorage.setItem(AUTO_PRECHARGE_STORAGE_KEY, String(value));
       } catch {
         /* ignore */
       }

@@ -65,6 +65,93 @@ def test_ddram_p_views():
     assert not dut.probe("RD_B", row20, clk=4001).row_open
 
 
+@pytest.mark.parametrize(
+    "view,auto_command,other_view",
+    [("A", "RDA_A", "B"), ("B", "RDA_B", "A")],
+)
+def test_ddram_p_read_auto_precharge_closes_only_issuing_view(
+    view, auto_command, other_view
+):
+    dut, row_a, row_b, timings = make_two_view_dut()
+    rows = {"A": row_a, "B": row_b}
+    issue_clk = 200
+
+    assert dut.probe(auto_command, rows[view], clk=issue_clk).row_hit
+    dut.issue(auto_command, rows[view], clk=issue_clk)
+
+    assert not dut.probe(f"RD_{view}", rows[view], clk=issue_clk + 1).row_open
+    assert dut.probe(f"RD_{other_view}", rows[other_view], clk=issue_clk + 1).row_hit
+
+    next_row = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=30, Column=0)
+    ready_clk = issue_clk + timings["nRTP"] + timings["nRP"]
+    assert not dut.probe(f"ACT_{view}", next_row, clk=ready_clk - 1).ready
+    assert dut.probe(f"ACT_{view}", next_row, clk=ready_clk).ready
+
+
+@pytest.mark.parametrize(
+    "view,auto_command,other_view",
+    [("A", "WRA_A", "B"), ("B", "WRA_B", "A")],
+)
+def test_ddram_p_write_auto_precharge_observes_recovery(
+    view, auto_command, other_view
+):
+    dut, row_a, row_b, timings = make_two_view_dut()
+    rows = {"A": row_a, "B": row_b}
+    issue_clk = 200
+
+    assert dut.probe(auto_command, rows[view], clk=issue_clk).row_hit
+    dut.issue(auto_command, rows[view], clk=issue_clk)
+
+    assert not dut.probe(f"WR_{view}", rows[view], clk=issue_clk + 1).row_open
+    assert dut.probe(f"RD_{other_view}", rows[other_view], clk=issue_clk + 1).row_hit
+
+    next_row = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=30, Column=0)
+    ready_clk = (
+        issue_clk
+        + timings["nCWL"]
+        + timings["nBL"]
+        + timings["nWR"]
+        + timings["nRP"]
+    )
+    assert not dut.probe(f"ACT_{view}", next_row, clk=ready_clk - 1).ready
+    assert dut.probe(f"ACT_{view}", next_row, clk=ready_clk).ready
+
+
+@pytest.mark.parametrize(
+    "auto_command,recovery",
+    [
+        ("RDA_B", lambda timing: timing["nRTP"] + timing["nRP"]),
+        (
+            "WRA_B",
+            lambda timing: timing["nCWL"]
+            + timing["nBL"]
+            + timing["nWR"]
+            + timing["nRP"],
+        ),
+    ],
+)
+def test_ddram_p_auto_precharge_completes_before_maintenance(auto_command, recovery):
+    dram = ramulator.dram.DDRAM_P(
+        org_preset="DDR5_16Gb_x8",
+        timing_preset="DDR5_3200AN",
+        rank=1,
+    )
+    dut = DeviceUnderTest(dram)
+    row = dut.addr_vec(Rank=0, BankGroup=0, Bank=0, Row=10, Column=0)
+    timings = dict(zip(dram.timing_params, dram.to_config()["timing"]))
+    issue_clk = 100
+
+    dut.issue("ACT_B", row, clk=0)
+    dut.issue(auto_command, row, clk=issue_clk)
+    # RDA/WRA occupy two command-bus cycles while REFsb occupies one, so the
+    # generated timing edge adds one cycle to the nominal JEDEC interval.
+    ready_clk = issue_clk + recovery(timings) + 1
+
+    assert dut.probe("REFsb", row, clk=ready_clk - 1).preq == "REFsb"
+    assert not dut.probe("REFsb", row, clk=ready_clk - 1).ready
+    assert dut.probe("REFsb", row, clk=ready_clk).ready
+
+
 def test_ddram_p_row_conflict():
     dram = ramulator.dram.DDRAM_P(
         org_preset="DDR5_16Gb_x8",

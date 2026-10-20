@@ -57,7 +57,8 @@ class DRAMDevice {
       int refresh_view_count,
       int ari,
       int nack_latency,
-      int max_pending);
+      int max_pending,
+      bool preserve_open_rows);
   void tick_managed_refresh(Clk_t clk, const std::vector<unsigned char>& protected_views);
   std::vector<InternalCommandEvent> take_internal_events();
   void present_internal_event(const InternalCommandEvent& event);
@@ -179,10 +180,15 @@ class DRAMDevice {
   int m_refresh_ari = 1;
   int m_refresh_nack_latency = 1;
   int m_refresh_max_pending = 8;
+  bool m_refresh_preserve_open_rows = false;
   int m_refresh_row_level = -1;
   int m_iref_commands[2] = {-1, -1};
   int m_act_commands[2] = {-1, -1};
   int m_pre_commands[2] = {-1, -1};
+  int m_rd_commands[2] = {-1, -1};
+  int m_wr_commands[2] = {-1, -1};
+  int m_rda_commands[2] = {-1, -1};
+  int m_wra_commands[2] = {-1, -1};
   int m_act_nack_command = -1;
   size_t m_refresh_count = 0;
   std::vector<ManagedBankState> m_managed_banks;

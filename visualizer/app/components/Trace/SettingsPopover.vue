@@ -54,7 +54,7 @@
             Command annotations
           </p>
           <p class="mt-1 text-xs text-zinc-500 leading-snug">
-            Add semantic borders without replacing the existing command colors.
+            Add semantic overlays without replacing the existing command colors.
           </p>
         </div>
 
@@ -77,6 +77,16 @@
               </p>
             </div>
             <USwitch v-model="colorByView" aria-label="Color command borders by DDRAM-P view" />
+          </div>
+
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-zinc-200">Show auto-precharge phases</p>
+              <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                Extends RDA/WRA with recovery and internal nRP operation markers.
+              </p>
+            </div>
+            <USwitch v-model="showAutoPrecharge" aria-label="Show auto-precharge phases" />
           </div>
         </div>
       </div>
@@ -103,5 +113,10 @@ const highlightRowHits = computed({
 const colorByView = computed({
   get: () => uiStore.colorByView,
   set: (value: boolean) => uiStore.setColorByView(value),
+});
+
+const showAutoPrecharge = computed({
+  get: () => uiStore.showAutoPrecharge,
+  set: (value: boolean) => uiStore.setShowAutoPrecharge(value),
 });
 </script>

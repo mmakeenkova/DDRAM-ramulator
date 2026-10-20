@@ -81,6 +81,32 @@ Generated slices and `.ram2bin` files live under `output/` and are ignored by
 Git. Use `--output` to choose a different trace prefix. Use
 `--view-selection AlwaysA` for a single-view comparison.
 
+## Asymmetric view auto-precharge
+
+Use view B as a transient view while leaving A open-page. The policy keeps B
+open when at least one other same-bank, same-row request is buffered, then uses
+`RDA_B` or `WRA_B` for the last queued access:
+
+```bash
+PYTHONPATH=python .venv/bin/python experiments/ddram_p_visualizer/run.py \
+  --row-policy DDRAMViewAutoPrecharge \
+  --auto-precharge-view B
+```
+
+The default output is
+`output/ddram_p.auto-precharge-b.ch0.ram2bin`. Use
+`--no-preserve-queued-hits` for an always-transient view, or
+`--min-hits-to-preserve N` to require more queued reuse before keeping the row
+open. `--auto-precharge-view A` provides the symmetric policy for experiments.
+
+In Command View, an `RDA_A/B` or `WRA_A/B` is followed by an auto-precharge
+overlay: a dashed gray recovery interval and an orange `nRP` interval. The end
+of the orange interval is the earliest point at which that view can be
+activated again. Hover the originating command for the timing values. This is
+an internal phase of the combined command, not a separately issued `PRE_A/B`.
+The overlay is enabled by default and can be hidden under **Settings → Show
+auto-precharge phases**.
+
 ## Autonomous refresh
 
 The experiment can enable either DRAM-managed refresh interface. It continues

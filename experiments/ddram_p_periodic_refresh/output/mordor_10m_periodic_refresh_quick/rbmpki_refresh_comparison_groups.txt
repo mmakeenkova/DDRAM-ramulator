@@ -1,0 +1,21 @@
+RBMPKI groups
+=============
+
+RBMPKI = 1000 * (row misses + row conflicts) / instructions,
+measured in the one-view/no-refresh baseline. Groups are equal-count terciles.
+
+Low RBMPKI (n=4)
+  538.imagick              0.003100
+  403.gcc                  0.069000
+  401.bzip2                0.805200
+  ycsb_aserver             1.016400
+
+Medium RBMPKI (n=3)
+  stream_10.trace          1.420500
+  tpcc64                   1.594600
+  557.xz                   2.930200
+
+High RBMPKI (n=3)
+  520.omnetpp              8.358800
+  470.lbm                  16.821100
+  429.mcf                  67.928000

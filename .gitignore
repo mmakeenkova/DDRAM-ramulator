@@ -21,6 +21,8 @@ resources/jedec/
 # Generated/non-code artifacts
 *.ipynb
 *.pdf
+!spec/**/*.pdf
+!spec/*.pdf
 *.pkl
 *.png
 tests/plots/

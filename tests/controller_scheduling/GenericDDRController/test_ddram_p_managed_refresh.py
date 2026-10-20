@@ -143,6 +143,42 @@ def test_internal_refresh_relinquishes_an_idle_open_view_before_same_row_refresh
     assert any(event.command in ("ACT_A", "ACT_B") for event in history)
 
 
+@pytest.mark.parametrize("mode", ["Oracle", "Nack"])
+def test_preserve_open_rows_keeps_row_open_but_blocks_access_during_refresh(mode):
+    dut = make_dut(
+        mode,
+        dram_refresh_interval=16,
+        dram_refresh_duration=4,
+        dram_refresh_preserve_open_rows=True,
+    )
+    target = addr(dut, row=0)
+    dut.send_request("Read", target)
+    dut.run_until_idle()
+
+    for _ in range(64):
+        events = dut.tick()
+        refresh = next(
+            (
+                event for event in events
+                if event.command.startswith("IREF_") and event.addr_vec[:4] == target[:4]
+            ),
+            None,
+        )
+        if refresh is not None:
+            break
+    else:
+        raise AssertionError("Bank 0 never began its pending internal refresh")
+
+    dut.send_request("Read", target)
+    history = dut.run_until_idle()
+    assert not any(event.command in ("ACT_A", "ACT_B") for event in history)
+    assert any(event.command in ("RD_A", "RD_B") for event in history)
+    if mode == "Nack":
+        assert any(event.command == "ACT_NACK" for event in history)
+    else:
+        assert not any(event.command == "ACT_NACK" for event in history)
+
+
 def test_managed_refresh_rejects_a_controller_refresh_manager():
     # DDR5 lets AllBank initialize far enough for the controller's mutual-
     # exclusion check; the managed engine then rejects it before its own
@@ -156,6 +192,11 @@ def test_managed_refresh_rejects_a_controller_refresh_manager():
             dram_managed_refresh="Oracle",
             refresh_manager=ramulator.refresh_manager.AllBank(),
         )
+
+
+def test_preserve_open_rows_requires_explicit_managed_refresh_mode():
+    with pytest.raises(RuntimeError, match="counterfactual managed-refresh control"):
+        make_dut("Disabled", dram_refresh_preserve_open_rows=True)
 
 
 def test_internal_events_are_excluded_from_external_command_bus_constraints():

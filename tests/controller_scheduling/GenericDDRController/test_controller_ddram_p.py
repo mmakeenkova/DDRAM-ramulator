@@ -214,7 +214,7 @@ def test_same_row_in_different_banks_is_independent(dut):
 
 # DDRAM: Reject inherited single-row closure rather than corrupting dual-view state.
 def test_unsupported_row_policy_is_rejected():
-    with pytest.raises(RuntimeError, match="DDRAM-P currently requires the Open row policy"):
+    with pytest.raises(RuntimeError, match="requires the Open or DDRAMViewAutoPrecharge"):
         make_dut(row_policy=ramulator.row_policy.ClosedCAP(cap=1))
 
 

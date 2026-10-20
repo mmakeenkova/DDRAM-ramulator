@@ -27,6 +27,7 @@ class GenericDDR(Component):
     dram_refresh_ari = Param(int, default=1)
     dram_refresh_nack_latency = Param(int, default=1)
     dram_refresh_max_pending = Param(int, default=8)
+    dram_refresh_preserve_open_rows = Param(bool, default=False)
     scheduler = Child("scheduler")
     refresh_manager = Child("refresh_manager")
     row_policy = Child("row_policy")

@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Trace prefix; '.ch0.ram2bin' is appended by the recorder. "
-            "By default the refresh mode, interval, and duration are encoded in the name."
+            "By default the row-policy and refresh settings are encoded in the name."
         ),
     )
     parser.add_argument(
@@ -64,6 +64,29 @@ def parse_args() -> argparse.Namespace:
         choices=("TwoView", "QueueAware", "AlwaysA"),
         default="TwoView",
         help="DDRAM-P view-selection policy (default: TwoView).",
+    )
+    parser.add_argument(
+        "--row-policy",
+        choices=("Open", "DDRAMViewAutoPrecharge"),
+        default="Open",
+        help="Row-closure policy (default: Open).",
+    )
+    parser.add_argument(
+        "--auto-precharge-view",
+        choices=("A", "B"),
+        default="B",
+        help="Transient view used by DDRAMViewAutoPrecharge (default: B).",
+    )
+    parser.add_argument(
+        "--no-preserve-queued-hits",
+        action="store_true",
+        help="Auto-precharge even when another request to the same row is queued.",
+    )
+    parser.add_argument(
+        "--min-hits-to-preserve",
+        type=int,
+        default=1,
+        help="Queued same-row requests needed to suppress auto-precharge (default: 1).",
     )
     parser.add_argument(
         "--managed-refresh",
@@ -90,13 +113,18 @@ def resolve_output_prefix(args: argparse.Namespace) -> Path:
     """Preserve explicit names and derive descriptive names for default output."""
     if args.output is not None:
         return args.output.expanduser().resolve()
-    if args.managed_refresh == "Disabled":
-        name = "ddram_p"
-    else:
+    name = "ddram_p"
+    if args.row_policy == "DDRAMViewAutoPrecharge":
+        name += f".auto-precharge-{args.auto_precharge_view.lower()}"
+        if args.no_preserve_queued_hits:
+            name += ".always"
+        elif args.min_hits_to_preserve != 1:
+            name += f".preserve-{args.min_hits_to_preserve}"
+    if args.managed_refresh != "Disabled":
         interval = "nREFI" if args.refresh_interval < 0 else str(args.refresh_interval)
         duration = "nRFCsb" if args.refresh_duration < 0 else str(args.refresh_duration)
-        name = (
-            f"ddram_p.refresh-{args.managed_refresh.lower()}"
+        name += (
+            f".refresh-{args.managed_refresh.lower()}"
             f".interval-{interval}.duration-{duration}"
         )
     return (EXPERIMENT_DIR / "output" / name).resolve()
@@ -134,6 +162,10 @@ def build_simulation(
     output_prefix: Path,
     instructions: int,
     view_selection: str,
+    row_policy_name: str,
+    auto_precharge_view: str,
+    preserve_queued_hits: bool,
+    min_hits_to_preserve: int,
     managed_refresh: str,
     refresh_interval: int,
     refresh_duration: int,
@@ -156,11 +188,20 @@ def build_simulation(
         rank=1,
     )
 
+    if row_policy_name == "DDRAMViewAutoPrecharge":
+        row_policy = ramulator.row_policy.DDRAMViewAutoPrecharge(
+            auto_precharge_view=auto_precharge_view,
+            preserve_queued_hits=preserve_queued_hits,
+            min_hits_to_preserve=min_hits_to_preserve,
+        )
+    else:
+        row_policy = ramulator.row_policy.Open()
+
     controller = ramulator.controller.GenericDDR(
         dram=dram,
         scheduler=ramulator.scheduler.FRFCFSViewAware(),
         refresh_manager=ramulator.refresh_manager.NoRefresh(),
-        row_policy=ramulator.row_policy.Open(),
+        row_policy=row_policy,
         addr_mapper=ramulator.addr_mapper.RoBaRaCoCh(),
         view_selection=view_selection,
         dram_managed_refresh=managed_refresh,
@@ -197,6 +238,10 @@ def main() -> None:
         output_prefix,
         args.instructions,
         args.view_selection,
+        args.row_policy,
+        args.auto_precharge_view,
+        not args.no_preserve_queued_hits,
+        args.min_hits_to_preserve,
         args.managed_refresh,
         args.refresh_interval,
         args.refresh_duration,

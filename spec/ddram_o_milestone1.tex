@@ -1,0 +1,489 @@
+\documentclass[9pt,twocolumn]{extarticle}
+
+\usepackage[top=0.60in,bottom=0.62in,left=0.58in,right=0.58in,columnsep=0.24in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[table]{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{fancyhdr}
+\usepackage[compact]{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{DDRAMBlue}{HTML}{4773B4}
+\definecolor{DDRAMGreen}{HTML}{59AA9B}
+\definecolor{DDRAMOrange}{HTML}{FF9D42}
+\definecolor{DDRAMViolet}{HTML}{6451DE}
+\definecolor{DDRAMGrey}{HTML}{ECECEC}
+\definecolor{DDRAMCharcoal}{HTML}{4B514F}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=DDRAMBlue,
+  urlcolor=DDRAMViolet,
+  pdftitle={DDRAM-O Milestone 1 Specification},
+  pdfauthor={DDRAM Project}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{DDRAM-O Milestone 1}
+\rhead{Simplified Device and Timing Model}
+\cfoot{\thepage}
+\setlength{\headheight}{14pt}
+
+\setlength{\parindent}{0.9em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+\renewcommand{\arraystretch}{0.94}
+\setlist{nosep,leftmargin=*,topsep=2pt}
+\titlespacing*{\section}{0pt}{7pt plus 2pt minus 1pt}{3pt}
+\titlespacing*{\subsection}{0pt}{5pt plus 1pt minus 1pt}{2pt}
+\titleformat{\section}{\large\bfseries\color{DDRAMCharcoal}}{\thesection}{0.45em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{DDRAMCharcoal}}{\thesubsection}{0.4em}{}
+\newcommand{\cmd}[1]{\texttt{#1}}
+\newcommand{\param}[1]{\texttt{#1}}
+\newcommand{\viewA}{\textsf{A}}
+\newcommand{\viewB}{\textsf{B}}
+\newcommand{\provisional}{\textcolor{DDRAMOrange}{\textbf{Provisional}}}
+\newcommand{\normative}{\textcolor{DDRAMBlue}{\textbf{Normative}}}
+
+\begin{document}
+\twocolumn[
+\begin{center}
+  {\LARGE\bfseries DDRAM-O Milestone 1 Specification}\\
+  \vspace{0.2em}
+  {\large Simplified Orthogonal-View Device and Timing Model}\\
+  \vspace{0.35em}
+  {\small DDRAM Project \hfill Revision 0.1 --- 20 October 2026}
+\end{center}
+\vspace{2pt}
+\noindent\fcolorbox{DDRAMBlue}{DDRAMGrey}{%
+\parbox{\dimexpr\textwidth-2\fboxsep-2\fboxrule\relax}{%
+\textbf{Status.} This document defines the first implementable DDRAM-O model
+for Ramulator2. Architectural interfaces and state transitions are normative.
+Electrical timing values introduced specifically for DDRAM-O are placeholders
+and must remain configurable until replaced by SPICE-calibrated values.}}
+\vspace{7pt}
+]
+
+\tableofcontents
+
+\section{Purpose and Scope}
+
+DDRAM-O provides two access structures over the same DRAM cell array. View
+\viewA{} uses the conventional row orientation; view \viewB{} is rotated by
+$90^\circ$, so a row in one view geometrically corresponds to a column in the
+other. The complete architecture creates cell-intersection hazards between
+simultaneously open rows. Milestone 1 intentionally omits those hazards and
+models the two row paths as independent, subject to an explicit cross-view
+activation delay.
+
+The purpose of this milestone is to establish a stable device interface for:
+
+\begin{itemize}
+  \item view-specific conventional accesses;
+  \item overlap between activity on the two row paths;
+  \item atomic processing-using-DRAM (PuD) primitives;
+  \item configurable, visible placeholder timings; and
+  \item command traces suitable for correctness and scheduling analysis.
+\end{itemize}
+
+This is a timing and state model. Functional arithmetic, operand-row
+allocation, energy calibration, and operation scheduling are later milestones.
+
+\subsection{Normative language}
+
+The words \textbf{must}, \textbf{must not}, \textbf{should}, and \textbf{may}
+describe implementation requirements. A requirement marked \provisional{}
+defines the initial model but may be replaced by calibrated data without
+changing the command interface.
+
+\section{Goals and Non-Goals}
+
+\subsection{Milestone 1 goals}
+
+\begin{enumerate}
+  \item Introduce a distinct \cmd{DDRAM\_O} DRAM standard.
+  \item Preserve the conventional DDR5 access path through view \viewA{}.
+  \item Permit one conventional row to remain open independently in each view.
+  \item Introduce explicit activation, access, and precharge commands per view.
+  \item Introduce an atomic multi-row activation primitive per view.
+  \item Permit cross-view overlap after a configurable minimum delay.
+  \item Preserve conventional command-, column-, and data-bus sharing.
+  \item Make every DDRAM-O-specific timing overridable from Python configuration.
+\end{enumerate}
+
+\subsection{Explicit non-goals}
+
+Milestone 1 does \emph{not} model:
+
+\begin{itemize}
+  \item A/B row-intersection conflicts or simultaneous-sensing hazards;
+  \item masked intersection bits or half-amplitude sensing;
+  \item persistent states with three or five conventionally open rows;
+  \item functional data values or arithmetic correctness;
+  \item compute-row allocation, operand lifetime, or spilling;
+  \item calibrated multi-row activation current or energy; or
+  \item end-to-end CPU trace offloading.
+\end{itemize}
+
+Results produced by this model must not be described as SPICE-calibrated.
+
+\section{Architectural Model}
+
+\subsection{Views and addressing}
+
+View \viewA{} is the host-oriented conventional view. View \viewB{} is the
+orthogonal view. Both commands use the existing hierarchical Ramulator address
+vector. In Milestone 1, the row field is interpreted in the coordinate system
+of the selected view. Consequently, row number $r$ in \viewA{} and row number
+$r$ in \viewB{} do not denote the same geometric row.
+
+The address mapper is not required to perform a physical transpose in this
+milestone. The selected command identifies the coordinate system. A later
+functional model will map both coordinate systems onto shared cells.
+
+\subsection{Per-bank state}
+
+Each physical bank maintains the state shown in Table~\ref{tab:state}.
+
+\begin{table}[ht]
+\centering
+\caption{Required simplified state per physical bank.}
+\label{tab:state}
+\rowcolors{2}{DDRAMGrey}{white}
+\begin{tabularx}{\columnwidth}{@{}l l X@{}}
+\toprule
+Field & Domain & Meaning \\
+\midrule
+\cmd{active\_row[A]} & closed or row ID & Conventional row open through view \viewA{}. \\
+\cmd{active\_row[B]} & closed or row ID & Conventional row open through view \viewB{}. \\
+\cmd{busy\_until[A]} & cycle & Earliest cycle at which another \viewA{} row-path operation may start. \\
+\cmd{busy\_until[B]} & cycle & Earliest cycle at which another \viewB{} row-path operation may start. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The two active-row fields are independent. Opening or precharging one view must
+not change the other view's state. No equality check between the two row IDs is
+performed. A bank is conventionally closed only when both fields are closed.
+
+\subsection{Simplified concurrency rule}
+
+Commands on different views may overlap once their activation-like command
+starts are separated by \param{nXACTO}. Commands still contend for all shared
+resources inherited from DDR5. In particular, DDRAM-O adds row-path
+parallelism, not an additional off-chip data interface.
+
+\section{Command Interface}
+
+\subsection{Required commands}
+
+Table~\ref{tab:commands} defines the Milestone 1 command set. ``Local'' means
+the state or timing effect applies only to the command's selected view.
+
+\begin{table*}[t]
+\centering
+\caption{Required DDRAM-O commands.}
+\label{tab:commands}
+\begin{tabularx}{\textwidth}{@{}p{0.14\textwidth}p{0.13\textwidth}X@{}}
+\toprule
+Command & Scope & Semantics \\
+\midrule
+\rowcolor{DDRAMGrey}\cmd{ACT\_A} & Bank, local & Open the target row in view \viewA{}. \\
+\cmd{ACT\_B} & Bank, local & Open the target row in view \viewB{}. \\
+\rowcolor{DDRAMGrey}\cmd{PRE\_A} & Bank, local & Close only the row open in view \viewA{}. \\
+\cmd{PRE\_B} & Bank, local & Close only the row open in view \viewB{}. \\
+\rowcolor{DDRAMGrey}\cmd{RD\_A}, \cmd{WR\_A} & Bank, shared data path & Read or write the row open in view \viewA{}. \\
+\cmd{RD\_B}, \cmd{WR\_B} & Bank, shared data path & Read or write the row open in view \viewB{}. \\
+\rowcolor{DDRAMGrey}\cmd{MRA\_A} & Bank/subarray, local & Execute an atomic multi-row activation on view \viewA{}; no persistent multi-row-open state remains. \\
+\cmd{MRA\_B} & Bank/subarray, local & Symmetric atomic multi-row activation on view \viewB{}. \\
+\rowcolor{DDRAMGrey}\cmd{PREab} & Rank & Close both views in all targeted banks, for maintenance compatibility. \\
+\cmd{PREsb} & Same-bank scope & Close both views in the targeted banks, for maintenance compatibility. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\subsection{Multi-row activation abstraction}
+
+\cmd{MRA\_A} and \cmd{MRA\_B} represent the complete sequence
+
+\begin{equation}
+  \text{multi-row activation}
+  \rightarrow \text{sense/majority}
+  \rightarrow \text{restore}
+  \rightarrow \text{precharge}.
+\end{equation}
+
+The command must begin with its local view closed. If that view is open, its
+prerequisite is the corresponding local precharge. The opposite view may
+remain open. At command issue, the local view enters a timed busy state but
+does not acquire a persistent active-row identity. It is logically closed
+after the atomic operation.
+
+Milestone 1 may use the command address as a representative bank/subarray
+target. The operand-row list belongs to the compound PuD request introduced in
+Milestone 2 and must not be encoded through unrelated address-vector fields.
+
+\subsection{Reserved primitive timings}
+
+The implementation should also define \param{nCOPY} and \param{nNOT} timing
+parameters now, even if explicit \cmd{COPY\_A/B} and \cmd{NOT\_A/B} commands
+are introduced with functional primitives in a later milestone. Reserving
+separate parameters prevents future calibration from coupling logically
+different primitives merely because their initial values are equal.
+
+\section{Timing Model}
+
+\subsection{Parameters and initial values}
+
+All values are integer DRAM cycles. Table~\ref{tab:parameters} distinguishes
+inherited DDR5 timings from DDRAM-O-specific placeholders.
+
+\begin{table*}[t]
+\centering
+\caption{DDRAM-O-specific timing parameters.}
+\label{tab:parameters}
+\rowcolors{2}{DDRAMGrey}{white}
+\begin{tabularx}{\textwidth}{@{}l l l X@{}}
+\toprule
+Parameter & Initial value & Status & Interpretation \\
+\midrule
+\param{nXACTO} & $8$ & \provisional{} & Minimum start-to-start delay between activation-like commands on opposite views of one bank/subarray. \\
+\param{nMRA} & $\param{nRAS}+\param{nRP}$ & \provisional{} & Local-view occupancy of an atomic multi-row activation, including restoration and precharge. \\
+\param{nCOPY} & $\param{nRAS}+\param{nRP}+\lceil\param{nRP}/4\rceil$ & \provisional{} & Initial SIMDRAM-style activate--activate--precharge copy cost. \\
+\param{nNOT} & $\param{nCOPY}$ & \provisional{} & Initial inversion cost when represented as a DCC-assisted copy. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+The default \param{nXACTO} equals the current provisional DDRAM-P cross-view
+delay for comparability; it is not an electrical claim. The \param{nMRA} and
+\param{nCOPY} formulas follow the initial AP/AAP cost interpretation already
+used by the local PuD modeling infrastructure. SPICE calibration may replace
+the values, but should not rename the parameters or commands.
+
+\subsection{Activation-like command class}
+
+For cross-view constraints, the activation-like class is
+
+\begin{align*}
+\mathcal{A}_{A} &= \{\cmd{ACT\_A},\cmd{MRA\_A}\},\\
+\mathcal{A}_{B} &= \{\cmd{ACT\_B},\cmd{MRA\_B}\}.
+\end{align*}
+
+Future copy and inversion commands must join the class if their physical
+implementation begins with activation of their selected view.
+
+\subsection{Required timing relationships}
+
+\begin{table*}[t]
+\centering
+\caption{Normative timing relationships.}
+\label{tab:constraints}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}p{0.22\textwidth}p{0.13\textwidth}X@{}}
+\toprule
+Preceding & Following & Delay & Scope \\
+\midrule
+\rowcolor{DDRAMGrey}$\mathcal{A}_{A}$ & $\mathcal{A}_{B}$ & \param{nXACTO} & Same bank/subarray, cross-view \\
+$\mathcal{A}_{B}$ & $\mathcal{A}_{A}$ & \param{nXACTO} & Same bank/subarray, cross-view \\
+\rowcolor{DDRAMGrey}\cmd{MRA\_A} & Any \viewA{} row command & \param{nMRA} & Local view \\
+\cmd{MRA\_B} & Any \viewB{} row command & \param{nMRA} & Local view \\
+\rowcolor{DDRAMGrey}\cmd{ACT\_A/B} & Local \cmd{RD}/\cmd{WR} & \param{nRCD} & Inherited DDR5 behavior \\
+\cmd{ACT\_A/B} & Local \cmd{PRE} & \param{nRAS} & Inherited DDR5 behavior \\
+\rowcolor{DDRAMGrey}\cmd{PRE\_A/B} & Local activation-like & \param{nRP} & Local view \\
+\cmd{RD\_A/B}, \cmd{WR\_A/B} & Column commands & DDR5 column constraints & Shared bank/channel data path \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+An \cmd{MRA} command does not occupy the data bus. Opposite-view row-path
+commands may overlap its local occupancy after satisfying \param{nXACTO}, but
+ordinary column commands remain subject to shared DDR5 constraints.
+
+\subsection{Activation power window}
+
+\provisional{} Each \cmd{MRA} counts as one activation event for \param{nFAW}
+and the appropriate \param{nRRD} family. This is a bookkeeping approximation,
+not a claim that a multi-row activation draws the current of one ordinary
+activation. A later calibrated model may introduce a weighted activation
+budget or a dedicated constraint.
+
+\section{Prerequisites and State Transitions}
+
+\subsection{Conventional requests}
+
+For a request assigned to view $V$:
+
+\begin{enumerate}
+  \item If the target row is open in $V$, issue the terminal column command.
+  \item If $V$ is closed, issue \cmd{ACT\_$V$}, then the column command.
+  \item If another row is open in $V$, issue \cmd{PRE\_$V$},
+        \cmd{ACT\_$V$}, and then the column command.
+  \item State in the other view is neither a prerequisite nor a victim.
+\end{enumerate}
+
+\subsection{Atomic multi-row activation}
+
+For \cmd{MRA\_$V$}:
+
+\begin{enumerate}
+  \item If $V$ is open, issue \cmd{PRE\_$V$} first.
+  \item The other view need not be closed.
+  \item On issue, set \cmd{busy\_until[$V$]} to the current cycle plus
+        \param{nMRA}.
+  \item Leave \cmd{active\_row[$V$]} closed.
+  \item Do not change the other view's active row or busy deadline.
+\end{enumerate}
+
+The controller must preserve an operation's selected view after its first
+prerequisite issues, following the same commitment principle used for DDRAM-P.
+
+\section{Configuration Interface}
+
+The Python DRAM specification must accept explicit overrides. A representative
+configuration is:
+
+\begin{small}
+\begin{verbatim}
+ramulator.dram.DDRAM_O(
+    org_preset="DDR5_16Gb_x8",
+    timing_preset="DDR5_4800AN",
+    rank=1,
+    nXACTO=8,
+    # Other DDRAM-O timings use derived defaults.
+)
+\end{verbatim}
+\end{small}
+
+Derived defaults should be resolved after the inherited DDR5 preset so that
+changing \param{nRAS} or \param{nRP} changes the placeholder consistently.
+Every experiment result must record:
+
+\begin{itemize}
+  \item the resolved values of \param{nXACTO}, \param{nMRA},
+        \param{nCOPY}, and \param{nNOT};
+  \item the DDR5 organization and timing presets;
+  \item a timing-model revision string, initially
+        \cmd{placeholder-v1}; and
+  \item whether intersection modeling is enabled, initially \cmd{false}.
+\end{itemize}
+
+Invalid negative or zero DDRAM-O-specific timing values must be rejected after
+default resolution.
+
+\section{Trace and Statistics Requirements}
+
+The existing trace recorder must represent every DDRAM-O command without
+changing conventional trace semantics. Each event should expose:
+
+\begin{itemize}
+  \item command name and issue cycle;
+  \item selected view;
+  \item bank/subarray and representative row address;
+  \item whether it is a conventional or PuD command;
+  \item the timing constraint that determined readiness; and
+  \item the resolved timing value used by that constraint.
+\end{itemize}
+
+The initial statistics should include counts of view-A and view-B activations,
+multi-row activations by view, cycles each view is busy, cross-view overlap
+cycles, and stalls attributed to \param{nXACTO} or \param{nMRA}.
+
+\section{Verification Plan}
+
+Milestone 1 is complete only when the following tests pass.
+
+\begin{table*}[t]
+\centering
+\caption{Acceptance tests.}
+\label{tab:tests}
+\begin{tabularx}{\textwidth}{@{}p{0.06\textwidth}p{0.36\textwidth}X@{}}
+\toprule
+ID & Scenario & Required observation \\
+\midrule
+\rowcolor{DDRAMGrey}S1 & Open one row through each view. & Both rows remain open independently. \\
+S2 & Precharge one view. & Only that view closes. \\
+\rowcolor{DDRAMGrey}S3 & Open equal numeric row IDs in A and B. & Both activations are accepted; no DDRAM-P same-row rule applies. \\
+T1 & Issue opposite-view activations. & Start times differ by at least \param{nXACTO}. \\
+\rowcolor{DDRAMGrey}T2 & Repeat T1 with an override. & The observed separation follows the configured value exactly when no stricter constraint applies. \\
+T3 & Issue \cmd{MRA\_A}, then an A operation. & The A operation waits at least \param{nMRA}. \\
+\rowcolor{DDRAMGrey}T4 & Issue \cmd{MRA\_A}, then a B operation. & B may start after cross-view constraints without waiting for the full \param{nMRA}. \\
+T5 & Exercise the four-activation window. & MRA contributes one provisional activation event. \\
+\rowcolor{DDRAMGrey}P1 & Issue MRA while its local view is open. & A local precharge is issued first; the other view remains open. \\
+P2 & Issue rank or same-bank maintenance. & Both views close before inherited maintenance executes. \\
+\rowcolor{DDRAMGrey}C1 & Run conventional DDR5 tests. & Command translation, timing, and state behavior are unchanged. \\
+C2 & Record a mixed A/B/MRA sequence. & Trace contains view identity and the expected timing dependencies. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+Every timing test should independently replay the issued history through the
+device prerequisite and timing checks, as the DDRAM-P suite already does.
+
+\section{Calibration and Evolution}
+
+The command interface is intended to remain stable while the physical model
+becomes more detailed.
+
+\subsection{SPICE calibration}
+
+The first calibration step replaces \param{nXACTO} using the minimum safe
+separation between opposite-view sensing events under the selected voltage,
+temperature, process corner, and row multiplicity. The report should provide
+the time in nanoseconds and the conversion rule
+
+\begin{equation}
+  \param{nXACTO} = \left\lceil
+    \frac{t_{\mathrm{XACTO}}}{t_{\mathrm{CK}}}
+  \right\rceil.
+\end{equation}
+
+Multi-row activation simulations should subsequently calibrate local-view
+occupancy, restoration time, current limits, and whether MRA should carry more
+than one activation unit in the power window.
+
+\subsection{Intersection-aware extension}
+
+A later revision may add intersection identity, masking, and simultaneous
+sensing restrictions. It should extend readiness checks and functional data
+mapping, not replace view-specific command names or provisional timing
+parameters. Experiments must report which revision they use.
+
+\subsection{Functional PuD extension}
+
+Milestone 2 will attach explicit operand and destination rows to compound PuD
+requests. A functional shadow array will map the orthogonal coordinate systems
+onto shared cells and validate majority, addition, and multiplication. The
+atomic \cmd{MRA\_A/B} commands defined here remain the timing-level leaves of
+those operation graphs.
+
+\section{Implementation Boundary}
+
+The recommended separation of responsibilities is:
+
+\begin{itemize}
+  \item \textbf{DRAM specification:} commands, state transitions, prerequisites,
+        timing constraints, and parameter resolution;
+  \item \textbf{controller:} request preparation, selected-view commitment,
+        timing-aware issue, and retirement;
+  \item \textbf{PuD compiler (later):} operation decomposition, dependencies,
+        operand placement, and temporary rows;
+  \item \textbf{scheduler (later):} selection among ready primitive commands;
+  \item \textbf{functional model (later):} data-value correctness; and
+  \item \textbf{energy model (later):} calibrated per-primitive energy.
+\end{itemize}
+
+This boundary preserves conventional DDR5 behavior and prevents placeholder
+electrical assumptions from becoming embedded in scheduling policy.
+
+\end{document}

@@ -12,6 +12,9 @@ import { CMD_PALETTE, defaultCmdColor, hex2rgb, isWriteCommand } from '~/utils/c
 import type { RequestTypeStoredColors } from '~/utils/commandColorStorage';
 import { getEventTimingCauses, timingCauseDescription } from '~/utils/timingCauses';
 import {
+  autoPrechargePhases,
+  AUTO_PRECHARGE_COLOR,
+  AUTO_PRECHARGE_RECOVERY_COLOR,
   eventView,
   ROW_ACCESS_HIT,
   ROW_HIT_BORDER_COLOR,
@@ -1729,6 +1732,81 @@ export function useRenderer(
       ctx.fillText(label, sx, y);
       ctx.shadowBlur = 0;
     };
+
+    // RDA/WRA carry an internal operation that has no separate PRE command in
+    // the trace. Show the access-recovery portion as a dashed lead-in and the
+    // actual nRP precharge as an orange bracket below the command lane.
+    if (uiStore.viewMode === 'command' && uiStore.showAutoPrecharge
+      && cmdRelClk && cmdLaneIdx && cmdSwimlaneData && N > 0) {
+      const maxRecovery = Math.max(
+        getTimingValue(spec, 'nRTP', 0),
+        getTimingValue(spec, 'nCWL', 0)
+          + getTimingValue(spec, 'nBL', 0)
+          + getTimingValue(spec, 'nWR', 0),
+      );
+      const maxDuration = maxRecovery + getTimingValue(spec, 'nRP', 0);
+      const first = Math.max(0, bisectLeft(cmdRelClk, relStart - maxDuration, N));
+      const last = Math.min(N, bisectRight(cmdRelClk, relEnd, N));
+      if (last - first <= TIMING_EDGE_MAX_VISIBLE) {
+        ctx.save();
+        ctx.lineCap = 'butt';
+        for (let i = first; i < last; i++) {
+          const commandId = arrays.cmdId[i]!;
+          const phases = autoPrechargePhases(spec, commandId);
+          if (!phases) continue;
+
+          const issue = Number(arrays.clk[i]!);
+          const commandEnd = issue + getCommandDuration(spec, commandId);
+          const recoveryEnd = issue + phases.recoveryCycles;
+          const prechargeEnd = issue + phases.totalCycles;
+          const recoveryX0 = ((commandEnd - viewState.start) / vw) * el.width;
+          const recoveryX1 = ((recoveryEnd - viewState.start) / vw) * el.width;
+          const prechargeX1 = ((prechargeEnd - viewState.start) / vw) * el.width;
+          const y = cmdSwimlaneData[cmdLaneIdx[i]! * 4]! + ROW_HEIGHT / 2 + 4;
+
+          if (recoveryX1 > recoveryX0) {
+            ctx.beginPath();
+            ctx.setLineDash([3, 2]);
+            ctx.strokeStyle = AUTO_PRECHARGE_RECOVERY_COLOR;
+            ctx.globalAlpha = 0.5;
+            ctx.lineWidth = 1;
+            ctx.moveTo(recoveryX0, y);
+            ctx.lineTo(recoveryX1, y);
+            ctx.stroke();
+          }
+
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 0.28;
+          ctx.fillStyle = AUTO_PRECHARGE_COLOR;
+          ctx.fillRect(recoveryX1, y - 2, Math.max(1, prechargeX1 - recoveryX1), 4);
+          ctx.globalAlpha = 0.82;
+          ctx.strokeStyle = AUTO_PRECHARGE_COLOR;
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          ctx.moveTo(recoveryX1, y);
+          ctx.lineTo(prechargeX1, y);
+          ctx.moveTo(recoveryX1, y - 3);
+          ctx.lineTo(recoveryX1, y + 3);
+          ctx.moveTo(prechargeX1, y - 3);
+          ctx.lineTo(prechargeX1, y + 3);
+          ctx.stroke();
+
+          if (prechargeX1 - recoveryX1 >= 58) {
+            ctx.globalAlpha = 0.9;
+            ctx.fillStyle = AUTO_PRECHARGE_COLOR;
+            ctx.font = '8px ui-monospace, JetBrains Mono, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(
+              `AP ${phases.view === 0 ? 'A' : 'B'} · nRP ${phases.prechargeCycles}`,
+              (recoveryX1 + prechargeX1) / 2,
+              y + 3,
+            );
+          }
+        }
+        ctx.restore();
+      }
+    }
 
     // Semantic borders are drawn on the 2D overlay so they compose with the
     // existing fill palette. Row hits use an outer dashed lime box; optional

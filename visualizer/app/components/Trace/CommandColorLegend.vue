@@ -39,12 +39,19 @@
         />
 
         <div
-          v-if="(uiStore.viewMode === 'command' && uiStore.highlightRowHits) || uiStore.colorByView"
+          v-if="(uiStore.viewMode === 'command' && (uiStore.highlightRowHits || uiStore.showAutoPrecharge)) || uiStore.colorByView"
           class="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-zinc-400 border-b border-zinc-800 pb-2"
         >
           <span v-if="uiStore.viewMode === 'command' && uiStore.highlightRowHits" class="inline-flex items-center gap-1.5">
             <span class="size-3 border-2 border-dashed" :style="{ borderColor: ROW_HIT_BORDER_COLOR }" />
             Row hit
+          </span>
+          <span v-if="uiStore.viewMode === 'command' && uiStore.showAutoPrecharge" class="inline-flex items-center gap-1.5">
+            <span class="inline-flex w-7 items-center">
+              <span class="w-3 border-t border-dashed" :style="{ borderColor: AUTO_PRECHARGE_RECOVERY_COLOR }" />
+              <span class="w-4 border-t-4" :style="{ borderColor: AUTO_PRECHARGE_COLOR }" />
+            </span>
+            Auto-precharge
           </span>
           <template v-if="uiStore.colorByView">
             <span class="inline-flex items-center gap-1.5">
@@ -148,7 +155,12 @@
 
 <script setup lang="ts">
 import type { RequestTypeStoredColors } from '~/utils/commandColorStorage';
-import { ROW_HIT_BORDER_COLOR, VIEW_BORDER_COLORS } from '~/utils/eventSemantics';
+import {
+  AUTO_PRECHARGE_COLOR,
+  AUTO_PRECHARGE_RECOVERY_COLOR,
+  ROW_HIT_BORDER_COLOR,
+  VIEW_BORDER_COLORS,
+} from '~/utils/eventSemantics';
 
 const sessionStore = useSessionStore();
 const uiStore = useUIStore();
