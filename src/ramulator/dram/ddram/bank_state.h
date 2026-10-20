@@ -36,6 +36,16 @@ inline void activate(DRAMNode* bank, int view, int row) {
   bank->m_ddram_active_rows[view] = row;
 }
 
+// DDRAM-O's orthogonal sensing paths may address equal numeric row IDs.  Its
+// simplified device model therefore enforces exclusivity only within a view;
+// intersection/electrical semantics are deliberately deferred to a later
+// milestone.
+inline void activate_orthogonal(DRAMNode* bank, int view, int row) {
+  assert(view == VIEW_A || view == VIEW_B);
+  assert(!view_open(bank, view));
+  bank->m_ddram_active_rows[view] = row;
+}
+
 inline void precharge(DRAMNode* bank, int view) {
   bank->m_ddram_active_rows[view] = CLOSED;
 }

@@ -55,6 +55,7 @@
 \newcommand{\viewB}{\textsf{B}}
 \newcommand{\provisional}{\textcolor{DDRAMOrange}{\textbf{Provisional}}}
 \newcommand{\normative}{\textcolor{DDRAMBlue}{\textbf{Normative}}}
+\newcommand{\timingrevision}{M1-P0}
 
 \begin{document}
 \twocolumn[
@@ -147,6 +148,17 @@ orthogonal view. Both commands use the existing hierarchical Ramulator address
 vector. In Milestone 1, the row field is interpreted in the coordinate system
 of the selected view. Consequently, row number $r$ in \viewA{} and row number
 $r$ in \viewB{} do not denote the same geometric row.
+
+More precisely, the row field is a \emph{view-local line index}. For example,
+\cmd{A:10} names line 10 in the \viewA{} coordinate system, whereas
+\cmd{B:10} names line 10 in the orthogonal \viewB{} coordinate system. The
+equal integers are labels in different namespaces; they do not mean that one
+physical row has been opened twice. The two selected lines may physically
+intersect at a cell, but Milestone 1 assigns that intersection no additional
+state transition, timing penalty, masking rule, or data-value effect. Thus
+both activations are legal in the simplified timing model. A later
+intersection-aware functional model must determine the shared-cell mapping and
+any resulting electrical or correctness restrictions.
 
 The address mapper is not required to perform a physical transpose in this
 milestone. The selected command identifies the coordinate system. A later
@@ -247,7 +259,10 @@ different primitives merely because their initial values are equal.
 \subsection{Parameters and initial values}
 
 All values are integer DRAM cycles. Table~\ref{tab:parameters} distinguishes
-inherited DDR5 timings from DDRAM-O-specific placeholders.
+inherited DDR5 timings from DDRAM-O-specific placeholders. The current
+provisional timing ledger is revision \timingrevision{}. This identifier and
+the resolved values should accompany experiment results until calibrated
+parameters replace the ledger.
 
 \begin{table*}[t]
 \centering
@@ -271,6 +286,40 @@ delay for comparability; it is not an electrical claim. The \param{nMRA} and
 \param{nCOPY} formulas follow the initial AP/AAP cost interpretation already
 used by the local PuD modeling infrastructure. SPICE calibration may replace
 the values, but should not rename the parameters or commands.
+
+\subsection{Provisional timing ledger and rationale}
+
+Table~\ref{tab:timing-ledger} records why each placeholder exists and what
+evidence is required to retire it. The defaults are modeling hypotheses, not
+predictions of a fabricated DDRAM-O device.
+
+\begin{table*}[t]
+\centering
+\caption{Provisional timing ledger, revision \timingrevision{}.}
+\label{tab:timing-ledger}
+\rowcolors{2}{DDRAMGrey}{white}
+\begin{tabularx}{\textwidth}{@{}p{0.12\textwidth}p{0.19\textwidth}X X@{}}
+\toprule
+Item & Current rule & Reason for the choice & Replacement evidence \\
+\midrule
+\param{nXACTO} & 8 cycles & Matches the DDRAM-P cross-view placeholder, giving initial A/B comparisons the same assumed coupling delay. It is deliberately independent of the DDR5 speed bin. & Worst-case SPICE separation between opposite-view sensing starts, converted with $\lceil t/t_{CK}\rceil$. \\
+\param{nMRA} & $\param{nRAS}+\param{nRP}$ & Treats atomic MRA as one active/restore interval followed by complete local precharge. It is conservative in state lifetime but adds no unsupported circuit-specific phase. & Simulated multi-row sensing, restoration, and precharge completion time for each supported row multiplicity. \\
+\param{nCOPY} & $\param{nMRA}+\lceil\param{nRP}/4\rceil$ & Starts from MRA occupancy and reserves a small explicit margin for the additional internal phase of an activate--activate--precharge copy. Keeping it distinct enables later calibration without changing the interface. & End-to-end source-to-destination copy waveform, including restoration and safe reuse of the local view. \\
+\param{nNOT} & $\param{nCOPY}$ & Models the initial DCC-assisted inversion path as copy-equivalent when no independent inversion measurement is available. Equality is not a permanent architectural requirement. & Dedicated inversion-path latency, or evidence that the copy and inversion paths are identical. \\
+MRA CA occupancy & 2 cycles & Conservatively matches DDR5 address-bearing activation commands while the final multi-row operand encoding is unspecified. & Final command encoding and command/address bus protocol. \\
+MRA activation weight & 1 event & Lets existing \param{nRRD}/\param{nFAW} machinery limit MRA immediately, without claiming that MRA draws ordinary-ACT current. & Calibrated current envelope and either a weighted activation budget or dedicated MRA power constraint. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+The implementation resolves the DDR5 preset first and then derives these
+values. User overrides take precedence and must be positive integer cycles.
+For the current \cmd{DDR5\_3200AN} preset, \param{nRAS}$=52$ and
+\param{nRP}$=24$, yielding \param{nMRA}$=76$ and
+\param{nCOPY}=\param{nNOT}$=82$ cycles; \param{nXACTO} remains 8 cycles.
+The reserved \param{nCOPY} and \param{nNOT} values do not yet gate an issued
+command and therefore must not be interpreted as measured operation latency in
+Milestone 1 results.
 
 \subsection{Activation-like command class}
 
@@ -374,7 +423,7 @@ Every experiment result must record:
         \param{nCOPY}, and \param{nNOT};
   \item the DDR5 organization and timing presets;
   \item a timing-model revision string, initially
-        \cmd{placeholder-v1}; and
+        \cmd{\timingrevision}; and
   \item whether intersection modeling is enabled, initially \cmd{false}.
 \end{itemize}
 
@@ -413,7 +462,7 @@ ID & Scenario & Required observation \\
 \midrule
 \rowcolor{DDRAMGrey}S1 & Open one row through each view. & Both rows remain open independently. \\
 S2 & Precharge one view. & Only that view closes. \\
-\rowcolor{DDRAMGrey}S3 & Open equal numeric row IDs in A and B. & Both activations are accepted; no DDRAM-P same-row rule applies. \\
+\rowcolor{DDRAMGrey}S3 & Open equal view-local line indices in A and B. & Both activations are accepted; equality of namespace-local labels creates no Milestone 1 intersection rule. \\
 T1 & Issue opposite-view activations. & Start times differ by at least \param{nXACTO}. \\
 \rowcolor{DDRAMGrey}T2 & Repeat T1 with an override. & The observed separation follows the configured value exactly when no stricter constraint applies. \\
 T3 & Issue \cmd{MRA\_A}, then an A operation. & The A operation waits at least \param{nMRA}. \\
@@ -451,6 +500,12 @@ the time in nanoseconds and the conversion rule
 Multi-row activation simulations should subsequently calibrate local-view
 occupancy, restoration time, current limits, and whether MRA should carry more
 than one activation unit in the power window.
+
+Each calibration update must increment the timing-ledger revision, retain the
+superseded defaults in version history, and record the circuit configuration,
+process/voltage/temperature corner, row multiplicity, time in nanoseconds,
+clock period, rounding rule, and resulting cycle count. This makes results
+produced with provisional and calibrated models distinguishable.
 
 \subsection{Intersection-aware extension}
 

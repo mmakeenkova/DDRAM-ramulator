@@ -37,6 +37,7 @@ target_sources(
   impl/LPDDR6.cpp
   impl/GDDR6.cpp
   impl/GDDR7.cpp
+  impl/DDRAM_O.cpp
   impl/DDRAM_P.cpp
 )
 
