@@ -7,6 +7,8 @@ states belong to later milestones.
 """
 
 from copy import deepcopy
+from decimal import Decimal, ROUND_CEILING
+from math import isfinite
 
 from ramulator.dram.ddr5 import DDR5
 from ramulator.dram.ddram_p import DDRAM_P
@@ -64,29 +66,69 @@ class DDRAM_O(DDR5):
     for _preset in timing_presets.values():
         _preset.update(nXACTO=-1, nMRA=-1, nCOPY=-1, nNOT=-1)
 
+    # DDRAM: Keep the default AP/AAP costs available to preset resolution and codegen.
     @classmethod
     def resolve_secondary_timings(cls, timing_dict, org_dict):
         super().resolve_secondary_timings(timing_dict, org_dict)
+        cls._resolve_pud_defaults(timing_dict, "pumulator-split", 4.0)
+
+    # DDRAM: Configure physical decoder delay and copy profile without changing DDR5's DSL.
+    def __init__(self, *, copy_timing_profile="pumulator-split", tDEC_ns=4.0, **kwargs):
+        super().__init__(**kwargs)
+        self.copy_timing_profile = copy_timing_profile
+        self.tDEC_ns = tDEC_ns
+
+    # DDRAM: Inherit Pumulator's ceiling-rounded AP/AAP formulas, independently of MRA overrides.
+    @staticmethod
+    def _resolve_pud_defaults(timing_dict, profile, decoder_ns):
         if timing_dict["nXACTO"] == -1:
             timing_dict["nXACTO"] = 8
         if timing_dict["nMRA"] == -1:
             timing_dict["nMRA"] = timing_dict["nRAS"] + timing_dict["nRP"]
         if timing_dict["nCOPY"] == -1:
-            timing_dict["nCOPY"] = (
-                timing_dict["nRAS"]
-                + timing_dict["nRP"]
-                + (timing_dict["nRP"] + 3) // 4
-            )
+            decoder_ticks = Decimal(str(decoder_ns)) * 1000 / Decimal(str(timing_dict["tCK_ps"]))
+            decoder_cycles = int(decoder_ticks.to_integral_value(rounding=ROUND_CEILING))
+            timing_dict["nCOPY"] = timing_dict["nRAS"] + timing_dict["nRP"] + (
+                decoder_cycles if profile == "pumulator-split" else timing_dict["nRAS"])
         if timing_dict["nNOT"] == -1:
             timing_dict["nNOT"] = timing_dict["nCOPY"]
 
+    # DDRAM: Derive PuD defaults after all explicit base and primitive overrides, locally to DDRAM-O.
     def resolve(self):
+        if self.copy_timing_profile not in ("pumulator-split", "pumulator-two-activate"):
+            raise ValueError("DDRAM_O: unknown copy_timing_profile")
+        if (isinstance(self.tDEC_ns, bool) or not isinstance(self.tDEC_ns, (int, float))
+                or not isfinite(self.tDEC_ns) or self.tDEC_ns <= 0):
+            raise ValueError("DDRAM_O: tDEC_ns must be finite and positive")
         org_dict, timing_dict = super().resolve()
+        for name in ("nRAS", "nRP", "tCK_ps"):
+            value = timing_dict[name]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"DDRAM_O: {name} must be a positive integer, got {value}")
+        for name in ("nXACTO", "nMRA", "nCOPY", "nNOT"):
+            if name in self._overrides:
+                value = timing_dict[name]
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise ValueError(f"DDRAM_O: {name} must be a positive integer, got {value}")
+            else:
+                timing_dict[name] = -1
+        self._resolve_pud_defaults(timing_dict, self.copy_timing_profile, self.tDEC_ns)
         for name in ("nXACTO", "nMRA", "nCOPY", "nNOT"):
             value = timing_dict[name]
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"DDRAM_O: {name} must be a positive integer, got {value}")
         return org_dict, timing_dict
+
+    # DDRAM: Preserve timing provenance alongside the resolved cycle values in experiment configs.
+    def to_config(self):
+        config = super().to_config()
+        config["ddram_timing_model"] = dict(
+            revision="M1-P1", copy_profile=self.copy_timing_profile,
+            tDEC_ns=self.tDEC_ns, rounding="ceil",
+            org_preset=self.org_preset, timing_preset=self.timing_preset,
+            overrides=dict(self._overrides), intersection_modeling=False,
+        )
+        return config
 
     # DDRAM-P already supplies the tested dual-view DDR5 timing envelope.  We
     # copy it rather than subclassing DDRAM-P so its command semantics and

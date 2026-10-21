@@ -23,7 +23,7 @@ def test_ddram_o_resolves_provisional_timings_and_accepts_overrides():
 
     assert timing["nXACTO"] == 8
     assert timing["nMRA"] == timing["nRAS"] + timing["nRP"]
-    assert timing["nCOPY"] == timing["nRAS"] + timing["nRP"] + (timing["nRP"] + 3) // 4
+    assert timing["nCOPY"] == 83
     assert timing["nNOT"] == timing["nCOPY"]
 
     overridden, _ = make_dut(nXACTO=13, nMRA=71, nCOPY=83, nNOT=79)
@@ -34,6 +34,49 @@ def test_ddram_o_resolves_provisional_timings_and_accepts_overrides():
         83,
         79,
     )
+
+
+# DDRAM: Physical decoder delay uses ceiling conversion at each selected clock period.
+@pytest.mark.parametrize("preset,mra,copy", [
+    ("DDR5_3200AN", 76, 83), ("DDR5_4800AN", 111, 121), ("DDR5_6400AN", 149, 162),
+])
+def test_pumulator_split_defaults_and_provenance(preset, mra, copy):
+    dram = ramulator.dram.DDRAM_O(org_preset="DDR5_16Gb_x8", timing_preset=preset)
+    _, timings = dram.resolve()
+    assert (timings["nMRA"], timings["nCOPY"], timings["nNOT"]) == (mra, copy, copy)
+    metadata = dram.to_config()["ddram_timing_model"]
+    assert metadata["revision"] == "M1-P1"
+    assert metadata["copy_profile"] == "pumulator-split"
+    assert metadata["tDEC_ns"] == 4.0
+    assert metadata["rounding"] == "ceil"
+
+
+# DDRAM: Resolve primitive defaults from final base/clock overrides, not preset-era values.
+@pytest.mark.parametrize("overrides,expected", [
+    ({"nRAS": 60, "nRP": 28}, (88, 95, 95)),
+    ({"nMRA": 99}, (99, 83, 83)),
+    ({"nCOPY": 101}, (76, 101, 101)),
+    ({"nCOPY": 101, "nNOT": 55}, (76, 101, 55)),
+    ({"tDEC_ns": 5.0}, (76, 84, 84)),
+    ({"tCK_ps": 500}, (76, 84, 84)),
+    ({"copy_timing_profile": "pumulator-two-activate"}, (76, 128, 128)),
+    ({"copy_timing_profile": "pumulator-two-activate", "nMRA": 99}, (99, 128, 128)),
+])
+def test_pumulator_override_order_and_profiles(overrides, expected):
+    dram, _ = make_dut(**overrides)
+    _, timings = dram.resolve()
+    assert tuple(timings[name] for name in ("nMRA", "nCOPY", "nNOT")) == expected
+
+
+# DDRAM: Reject invalid physical assumptions and explicit negative sentinels instead of deriving silently.
+@pytest.mark.parametrize("overrides", [
+    {"tDEC_ns": 0}, {"tDEC_ns": float("inf")}, {"tDEC_ns": float("nan")},
+    {"tDEC_ns": True}, {"copy_timing_profile": "unknown"}, {"tCK_ps": 0},
+    {"nRAS": -1}, {"nRP": 0}, {"nCOPY": -1}, {"nNOT": True},
+])
+def test_pumulator_rejects_invalid_configuration(overrides):
+    with pytest.raises(ValueError):
+        make_dut(**overrides)
 
 
 @pytest.mark.parametrize("name,value", [("nXACTO", 0), ("nMRA", -2), ("nCOPY", 1.5)])

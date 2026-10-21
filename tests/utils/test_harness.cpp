@@ -263,12 +263,14 @@ class ControllerUnderTestCpp {
     return spec().get_timing_value(name);
   }
 
-  void send_request(int type_id, const AddrVec_t& addr_vec, int source_id) {
+  void send_request(int type_id, const AddrVec_t& addr_vec, int source_id, int64_t dependency = -1) {
     validate_concrete_addr_vec(addr_vec);
     Request req(addr_vec, type_id);
     req.addr = synthesize_addr(addr_vec);
     req.intra_channel_addr = req.addr;
     req.source_id = source_id;
+    // DDRAM: Optional consumer dependencies reuse the same service-completion token as PuD leaves.
+    if (dependency >= 0) req.pud_dependency = m_pud_tokens.at(dependency);
 
     bool read_like = is_read_like_request(type_id);
     if (read_like) {
@@ -311,6 +313,32 @@ class ControllerUnderTestCpp {
     m_command_outstanding++;
   }
 
+  // DDRAM: Submit an explicit timing-level bit-serial primitive and retain its dependency token.
+  int64_t send_pud(const AddrVec_t& addr_vec, int required_view, const std::string& layout,
+                   int64_t layout_id, int64_t layout_version, int64_t dependency) {
+    validate_concrete_addr_vec(addr_vec);
+    Request req(addr_vec, Request::Type::PudMRA);
+    req.required_view = required_view;
+    req.pud_layout = layout == "BitSerial" ? Request::PudLayout::BitSerial : Request::PudLayout::Unspecified;
+    req.layout_id = layout_id;
+    req.layout_version = layout_version;
+    req.source_id = 0;
+    if (dependency >= 0) req.pud_dependency = m_pud_tokens.at(dependency);
+    req.callback = [this](Request& completed) {
+      --m_pud_completions_pending;
+      m_completions.push_back({m_controller->m_clk, completed.arrive, completed.type_id,
+                              completed.source_id, completed.addr_vec, completed.request_id,
+                              completed.selected_view, completed.layout_id, completed.layout_version});
+    };
+    if (!m_controller->send(req)) {
+      throw std::runtime_error("ControllerUnderTest failed to enqueue PuD request");
+    }
+    m_pud_tokens[req.request_id] = req.pud_completion;
+    ++m_pud_completions_pending;
+    ++m_command_outstanding;
+    return req.request_id;
+  }
+
   nb::list tick() {
     m_memory_system->tick();
 
@@ -338,7 +366,7 @@ class ControllerUnderTestCpp {
   }
 
   bool is_idle() const {
-    return m_command_outstanding == 0 && m_read_completions_pending == 0;
+    return m_command_outstanding == 0 && m_read_completions_pending == 0 && m_pud_completions_pending == 0;
   }
 
   // DDRAM: Drain completion records independently of the issued-command stream.
@@ -351,6 +379,12 @@ class ControllerUnderTestCpp {
       item["type_id"] = completion.type_id;
       item["source_id"] = completion.source_id;
       item["addr_vec"] = completion.addr_vec;
+      if (completion.type_id == Request::Type::PudMRA) {
+        item["request_id"] = completion.request_id;
+        item["selected_view"] = completion.selected_view;
+        item["layout_id"] = completion.layout_id;
+        item["layout_version"] = completion.layout_version;
+      }
       result.append(item);
     }
     m_completions.clear();
@@ -378,6 +412,8 @@ class ControllerUnderTestCpp {
   IControllerValidationHook* m_validation_hook = nullptr;
   size_t m_command_outstanding = 0;
   size_t m_read_completions_pending = 0;
+  size_t m_pud_completions_pending = 0;
+  std::map<int64_t, std::shared_ptr<Request::PudCompletion>> m_pud_tokens;
   bool m_stats_finalized = false;
   // DDRAM: Store plain C++ records so callbacks do not depend on Python objects.
   struct Completion {
@@ -386,6 +422,10 @@ class ControllerUnderTestCpp {
     int type_id;
     int source_id;
     AddrVec_t addr_vec;
+    int64_t request_id = -1;
+    int selected_view = -1;
+    int64_t layout_id = -1;
+    int64_t layout_version = -1;
   };
   std::vector<Completion> m_completions;
 
@@ -452,7 +492,11 @@ NB_MODULE(_ramulator_test, m) {
       .def_prop_ro("timings", &ControllerUnderTestCpp::timings)
       .def("timing", &ControllerUnderTestCpp::timing, nb::arg("name"))
       .def("send_request", &ControllerUnderTestCpp::send_request,
-           nb::arg("type_id"), nb::arg("addr_vec"), nb::arg("source_id") = 0)
+           nb::arg("type_id"), nb::arg("addr_vec"), nb::arg("source_id") = 0,
+           nb::arg("dependency") = -1)
+      .def("send_pud", &ControllerUnderTestCpp::send_pud, nb::arg("addr_vec"),
+           nb::arg("required_view"), nb::arg("layout"), nb::arg("layout_id"),
+           nb::arg("layout_version"), nb::arg("dependency") = -1)
       .def("priority_send", &ControllerUnderTestCpp::priority_send, nb::arg("command"), nb::arg("addr_vec"))
       .def("tick", &ControllerUnderTestCpp::tick)
       .def("is_idle", &ControllerUnderTestCpp::is_idle)

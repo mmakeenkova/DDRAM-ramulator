@@ -46,7 +46,7 @@ class DDRAMViewSelectionBase : public IViewSelection {
 
 // DDRAM: Fixed placement needs no exclusive reservation: all requests use A,
 // so conventional DDR5 arbitration can continue even between PRE and ACT.
-class AlwaysAViewSelection final : public DDRAMViewSelectionBase {
+class AlwaysAViewSelection : public DDRAMViewSelectionBase {
  public:
   // DDRAM: Cache the terminal commands without adding device state or timing rules.
   explicit AlwaysAViewSelection(const DRAMDevice& device)
@@ -83,6 +83,49 @@ class AlwaysAViewSelection final : public DDRAMViewSelectionBase {
  private:
   int m_read;
   int m_write;
+};
+
+// DDRAM: Host traffic stays on A while explicit bit-serial primitives own B by request identity.
+class DDRAMOViewSelection final : public AlwaysAViewSelection {
+ public:
+  // DDRAM: Reserve only the B prerequisite sequence; equal A/B row numbers are unrelated.
+  explicit DDRAMOViewSelection(DRAMDevice& device)
+      : AlwaysAViewSelection(device), m_device(device),
+        m_mra(device.m_spec->get_command_id("MRA_B")),
+        m_owners(device.m_bank_nodes.size(), -1) {
+  }
+
+  // DDRAM: Preparation is read-only with respect to reservations and never changes B coordinates.
+  bool prepare(Request& req) const override {
+    if (req.type_id != Request::Type::PudMRA) return AlwaysAViewSelection::prepare(req);
+    const auto owner = m_owners[m_device.get_flat_bank_id(req.addr_vec)];
+    if (owner != -1 && owner != req.request_id) return false;
+    req.selected_view = DDRAM::VIEW_B;
+    req.final_command = m_mra;
+    return true;
+  }
+
+  // DDRAM: Commit B on the first actual PRE/MRA issue; A needs no exclusive ownership.
+  void on_issue(Request& req) override {
+    if (req.type_id != Request::Type::PudMRA) return AlwaysAViewSelection::on_issue(req);
+    auto& owner = m_owners[m_device.get_flat_bank_id(req.addr_vec)];
+    assert(owner == -1 || owner == req.request_id);
+    owner = req.request_id;
+    req.view_committed = true;
+  }
+
+  // DDRAM: Device nMRA deadlines protect B after issue, so release prerequisite ownership here.
+  void on_retire(const Request& req) override {
+    if (req.type_id != Request::Type::PudMRA) return;
+    auto& owner = m_owners[m_device.get_flat_bank_id(req.addr_vec)];
+    assert(owner == req.request_id);
+    owner = -1;
+  }
+
+ private:
+  DRAMDevice& m_device;
+  int m_mra;
+  std::vector<int64_t> m_owners;
 };
 
 class DDRAMViewSelection final : public DDRAMViewSelectionBase {
@@ -283,6 +326,9 @@ class DDRAMViewSelection final : public DDRAMViewSelectionBase {
 
 // DDRAM: Keep the concrete policy outside the controller and scheduler code.
 std::unique_ptr<IViewSelection> make_ddram_view_selection(DRAMDevice& device, const std::string& policy) {
+  if (device.m_spec->standard_name == "DDRAM_O") {
+    return std::make_unique<DDRAMOViewSelection>(device);
+  }
   if (policy == "AlwaysA") {
     return std::make_unique<AlwaysAViewSelection>(device);
   }

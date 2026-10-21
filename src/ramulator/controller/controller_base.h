@@ -3,6 +3,7 @@
 
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -67,7 +68,7 @@ class ControllerBase : public IController, public Implementation {
   // Shared stats registration — call from subclass setup()
   void setup_base(IFrontEnd* frontend, IMemorySystem* memory_system);
 
-  // DDRAM: Enable view selection only for GenericDDR with DDRAM_P.
+  // DDRAM: Enable DDRAM-P placement or DDRAM-O layout-pinned mapping in GenericDDR.
   void init_view_selection(const std::string& policy);
   // DDRAM: Give queue-aware policies one order-independent demand snapshot.
   void update_view_selection_context();
@@ -83,6 +84,11 @@ class ControllerBase : public IController, public Implementation {
 
   // Request buffers
   std::deque<Request> m_pending;
+  // DDRAM: PuD service completions stay separate from read data-return deadlines.
+  std::deque<Request> m_pud_pending;
+  ReqBuffer m_pud_buffer;
+  // DDRAM: A live layout identity cannot change version until its primitive requests complete.
+  std::unordered_map<int64_t, std::pair<int64_t, size_t>> m_pud_layouts;
   ReqBuffer m_active_buffer;
   ReqBuffer m_priority_buffer;
   ReqBuffer m_read_buffer;
@@ -127,6 +133,8 @@ class ControllerBase : public IController, public Implementation {
   std::vector<size_t> s_read_row_conflicts_per_core;
 
   size_t s_num_read_reqs = 0;
+  size_t s_num_pud_reqs = 0;
+  size_t s_num_pud_reqs_served = 0;
   size_t s_num_write_reqs = 0;
   size_t s_num_maintenance_reqs = 0;
   size_t s_num_read_reqs_served = 0;
@@ -175,6 +183,12 @@ class ControllerBase : public IController, public Implementation {
   Candidate pick_best_ready_from(ReqBuffer& buffer, RequestFilterRef filter);
   Candidate pick_priority_if(RequestFilterRef filter = {});
   Candidate pick_rw_if(RequestFilterRef filter = {});
+  // DDRAM: Rank dependency-ready MRA leaves without blocking independent host traffic.
+  Candidate pick_pud_if();
+  // DDRAM: Validate and admit a B-only timing primitive without indexing DDR5 request mappings.
+  bool send_pud(Request& req);
+  // DDRAM: Publish PuD completion after the internal service interval, independently of reads.
+  void serve_completed_pud();
 
   // Scheduling helpers
   bool would_close_active(const Request& req) const;

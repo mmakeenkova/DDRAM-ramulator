@@ -27,5 +27,5 @@ def pytest_configure(config):
         "markers", "ddram_p: DDRAM-P device/controller tests and conventional DDR regression coverage"
     )
     config.addinivalue_line(
-        "markers", "ddram_o: DDRAM-O device timing and command-semantics tests"
+        "markers", "ddram_o: DDRAM-O device timing, command-semantics, and controller tests"
     )

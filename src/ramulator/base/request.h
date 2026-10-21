@@ -2,6 +2,7 @@
 #define RAMULATOR_BASE_REQUEST_H
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,7 +19,7 @@ struct Request {
   // Universal built-in external request types — always Read = 0, Write = 1.
   // Additional non-negative ids may exist as metadata for future extensions.
   struct Type {
-    enum : int { Read = 0, Write = 1 };
+    enum : int { Read = 0, Write = 1, PudMRA = 2 };
   };
 
   int type_id = -1;        // Request type. -1 is the convention for internal maintenance/direct-command requests.
@@ -33,6 +34,19 @@ struct Request {
   // DDRAM: Tentative until the first issued prerequisite; copied with the request.
   int selected_view = -1;
   bool view_committed = false;
+  // DDRAM: Timing-only PuD leaves require explicit layout identity and a pinned view.
+  enum class PudLayout { Unspecified, BitSerial };
+  PudLayout pud_layout = PudLayout::Unspecified;
+  int required_view = -1;
+  int64_t layout_id = -1;
+  int64_t layout_version = -1;
+  // DDRAM: Shared tokens survive request copies and let dependents wait for service completion.
+  struct PudCompletion {
+    const void* controller = nullptr;
+    bool complete = false;
+  };
+  std::shared_ptr<PudCompletion> pud_completion;
+  std::shared_ptr<const PudCompletion> pud_dependency;
   // Earliest cycle at which an ACT rejected by device-managed refresh may be retried.
   Clk_t retry_after = -1;
   int act_nack_count = 0;

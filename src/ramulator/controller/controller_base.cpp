@@ -9,6 +9,7 @@
 #include "ramulator/controller/rowpolicy/i_row_policy.h"
 #include "ramulator/controller/scheduler/i_scheduler.h"
 #include "ramulator/dram/dram_spec.h"
+#include "ramulator/dram/ddram/bank_state.h"
 #include "ramulator/frontend/i_frontend.h"
 
 namespace Ramulator {
@@ -84,28 +85,38 @@ size_t ControllerBase::count_queued_row_requests(const Request& issuing) const {
   return count;
 }
 
-// DDRAM: Conventional devices retain the original command-only behavior.
+// DDRAM: Pin DDRAM-O host accesses to A; DDRAM-P retains interchangeable views.
+// Conventional devices retain the original command-only behavior.
 void ControllerBase::init_view_selection(const std::string& policy) {
   if (policy != "Auto" && policy != "AlwaysA" && policy != "TwoView" && policy != "QueueAware") {
     throw std::runtime_error(
         "Unknown view_selection policy: " + policy +
         "; expected Auto, AlwaysA, TwoView, or QueueAware");
   }
-  if (m_device.m_spec->standard_name != "DDRAM_P") {
+  const bool is_ddram_o = m_device.m_spec->standard_name == "DDRAM_O";
+  if (m_device.m_spec->standard_name != "DDRAM_P" && !is_ddram_o) {
     if (policy != "Auto") {
-      throw std::runtime_error("Explicit view_selection requires DDRAM_P");
+      throw std::runtime_error("Explicit view_selection requires DDRAM_P or DDRAM_O");
     }
     return;
   }
+  // DDRAM: Orthogonal coordinates cannot use DDRAM-P's row-hit placement policies.
+  if (is_ddram_o && policy != "Auto" && policy != "AlwaysA") {
+    throw std::runtime_error("DDRAM_O requires Auto or AlwaysA view_selection for A-only host accesses");
+  }
   const std::string row_policy = m_config["row_policy"]["impl"].as<std::string>();
+  // DDRAM: Start with open-page host traffic; PuD and row-closure extensions follow separately.
+  if (is_ddram_o && row_policy != "Open") {
+    throw std::runtime_error("DDRAM_O currently requires the Open row policy");
+  }
   if (row_policy != "Open" && row_policy != "DDRAMViewAutoPrecharge") {
     throw std::runtime_error(
         "DDRAM-P requires the Open or DDRAMViewAutoPrecharge row policy");
   }
-  const std::string effective_policy = policy == "Auto" ? "TwoView" : policy;
+  const std::string effective_policy = is_ddram_o ? "AlwaysA" : (policy == "Auto" ? "TwoView" : policy);
   m_view_selection = make_ddram_view_selection(m_device, effective_policy);
   // DDRAM: AlwaysA has DDR5's active capacity; dual-view policies permit two owners.
-  m_active_buffer.max_size = (policy == "AlwaysA" ? 1 : 2) * m_device.m_bank_nodes.size();
+  m_active_buffer.max_size = (effective_policy == "AlwaysA" ? 1 : 2) * m_device.m_bank_nodes.size();
 }
 
 void ControllerBase::update_view_selection_context() {
@@ -155,6 +166,8 @@ void ControllerBase::init_base() {
   m_read_buffer.max_size = m_read_buffer_size;
   m_write_buffer.max_size = m_write_buffer_size;
   m_priority_buffer.max_size = m_priority_buffer_size;
+  // DDRAM: Bound the separate primitive queue using the existing request-buffer budget.
+  m_pud_buffer.max_size = m_read_buffer_size;
 
   // Create DRAMSpec and initialize the device
   // RAMULATOR_CHILD: dram
@@ -209,6 +222,8 @@ void ControllerBase::setup_base(IFrontEnd* frontend, IMemorySystem* memory_syste
   }
 
   m_stats.add("num_read_reqs", s_num_read_reqs);
+  m_stats.add("num_pud_reqs", s_num_pud_reqs);
+  m_stats.add("num_pud_reqs_served", s_num_pud_reqs_served);
   m_stats.add("num_write_reqs", s_num_write_reqs);
   m_stats.add("num_maintenance_reqs", s_num_maintenance_reqs);
   m_stats.add("num_read_reqs_served", s_num_read_reqs_served);
@@ -238,6 +253,17 @@ void ControllerBase::setup_base(IFrontEnd* frontend, IMemorySystem* memory_syste
 // ── IController overrides ───────────────────────────────────────────────
 
 bool ControllerBase::send(Request& req) {
+  // DDRAM: Reject unsupported external types before touching the device's request table.
+  if (req.type_id == Request::Type::PudMRA) {
+    return send_pud(req);
+  }
+  if (req.type_id != Request::Type::Read && req.type_id != Request::Type::Write) {
+    throw std::runtime_error("ControllerBase only supports Read, Write, and DDRAM-O PudMRA requests");
+  }
+  // DDRAM: Explicit host consumers may wait on a PuD token from the same controller.
+  if (req.pud_dependency && req.pud_dependency->controller != this) {
+    throw std::runtime_error("Request dependency must belong to this controller");
+  }
   if (req.request_id < 0) req.request_id = m_next_request_id++;
   // Address mapping: addr mapper populates addr_vec from intra_channel_addr.
   // PassThroughAddrMapper is a no-op (addr_vec already set by frontend).
@@ -249,8 +275,15 @@ bool ControllerBase::send(Request& req) {
   req.selected_view = -1;
   req.view_committed = false;
 
+  // DDRAM: Retry a dependency-blocked forwarding alias after its producer completes.
+  if (req.type_id == Request::Type::Read && req.pud_dependency && !req.pud_dependency->complete &&
+      m_buffered_write_addrs.count(req.addr)) {
+    req.arrive = -1;
+    return false;
+  }
+
   // Forward existing write requests to incoming read requests
-  if (req.type_id == Request::Type::Read) {
+  if (req.type_id == Request::Type::Read && (!req.pud_dependency || req.pud_dependency->complete)) {
     if (m_buffered_write_addrs.count(req.addr)) {
       // The request will depart at the next cycle
       req.arrive = m_clk;
@@ -271,6 +304,11 @@ bool ControllerBase::send(Request& req) {
     // Coalesce: if a write to the same address is already buffered, absorb this one
     // immediately instead of occupying another buffer slot.
     if (m_buffered_write_addrs.count(req.addr)) {
+      // DDRAM: A dependent write cannot complete through coalescing before its producer.
+      if (req.pud_dependency && !req.pud_dependency->complete) {
+        req.arrive = -1;
+        return false;
+      }
       if (req.callback) {
         req.callback(req);
       }
@@ -298,7 +336,61 @@ bool ControllerBase::send(Request& req) {
   return true;
 }
 
+// DDRAM: Timing-only MRA uses already-decoded B-local coordinates and explicit layout metadata.
+bool ControllerBase::send_pud(Request& req) {
+  if (m_device.m_spec->standard_name != "DDRAM_O" || !m_view_selection) {
+    throw std::runtime_error("PudMRA requests require GenericDDR with DDRAM_O");
+  }
+  if (req.required_view != DDRAM::VIEW_B || req.pud_layout != Request::PudLayout::BitSerial ||
+      req.layout_id < 0 || req.layout_version < 0) {
+    throw std::runtime_error("PudMRA requires view B, bit-serial layout, and nonnegative layout identity/version");
+  }
+  if (req.pud_dependency && req.pud_dependency->controller != this) {
+    throw std::runtime_error("PudMRA dependency must belong to this controller");
+  }
+  if (req.pud_completion) {
+    throw std::runtime_error("PudMRA request has already been admitted");
+  }
+  const auto layout = m_pud_layouts.find(req.layout_id);
+  if (layout != m_pud_layouts.end() && layout->second.first != req.layout_version) {
+    throw std::runtime_error("PudMRA layout version is frozen while requests are outstanding");
+  }
+  if (req.addr_vec.size() != static_cast<size_t>(m_device.m_spec->level_count)) {
+    throw std::runtime_error("PudMRA requires a concrete B-local address vector");
+  }
+  for (int level = 1; level < m_device.m_spec->level_count; ++level) {
+    if (req.addr_vec[level] < 0 || req.addr_vec[level] >= m_device.m_spec->organization.level_sizes[level]) {
+      throw std::runtime_error("PudMRA B-local address is out of bounds");
+    }
+  }
+  req.addr_vec[0] = m_channel_id;
+  if (req.request_id < 0) req.request_id = m_next_request_id++;
+  req.selected_view = -1;
+  req.view_committed = false;
+  req.final_command = m_device.m_spec->get_command_id("MRA_B");
+  req.arrive = m_clk;
+  req.pud_completion = std::make_shared<Request::PudCompletion>();
+  req.pud_completion->controller = this;
+  if (!m_pud_buffer.enqueue(req)) {
+    req.pud_completion.reset();
+    req.arrive = -1;
+    return false;
+  }
+  s_num_pud_reqs++;
+  auto& live_layout = m_pud_layouts[req.layout_id];
+  live_layout.first = req.layout_version;
+  ++live_layout.second;
+  return true;
+}
+
 bool ControllerBase::priority_send(Request& req) {
+  // DDRAM: MRA must use the service-tracked PuD path, never issue-time maintenance retirement.
+  if (req.type_id == Request::Type::PudMRA ||
+      (m_device.m_spec->standard_name == "DDRAM_O" &&
+       (req.final_command == m_device.m_spec->get_command_id("MRA_A") ||
+        req.final_command == m_device.m_spec->get_command_id("MRA_B")))) {
+    throw std::runtime_error("Submit DDRAM-O MRA through the B-only PudMRA request path");
+  }
   if (req.request_id < 0) req.request_id = m_next_request_id++;
   if (req.final_command < 0 || req.final_command >= m_device.m_spec->command_count) {
     throw std::runtime_error(fmt::format(
@@ -320,12 +412,13 @@ void ControllerBase::tick_prologue() {
   m_clk++;
   m_measured_clk++;
 
-  s_queue_len += m_read_buffer.size() + m_write_buffer.size() + m_priority_buffer.size();
+  s_queue_len += m_read_buffer.size() + m_write_buffer.size() + m_priority_buffer.size() + m_pud_buffer.size();
   s_read_queue_len += m_read_buffer.size();
   s_write_queue_len += m_write_buffer.size();
   s_priority_queue_len += m_priority_buffer.size();
 
   serve_completed_reads();
+  serve_completed_pud();
 }
 
 // ── Request lifecycle ────────────────────────────────────────────────────
@@ -342,7 +435,11 @@ void ControllerBase::retire_request(ReqBuffer::iterator& req_it, ReqBuffer& buff
     m_buffered_write_addrs.erase(req_it->addr);
   }
 
-  if (req_it->type_id == Request::Type::Read) {
+  if (req_it->type_id == Request::Type::PudMRA) {
+    // DDRAM: Internal restore/precharge finishes after nMRA; there is no read return.
+    req_it->depart = m_clk + m_device.m_spec->get_timing_value("nMRA");
+    m_pud_pending.push_back(*req_it);
+  } else if (req_it->type_id == Request::Type::Read) {
     // Read: completion with read latency
     req_it->depart = m_clk + m_device.m_spec->read_latency;
     m_pending.push_back(*req_it);
@@ -381,6 +478,7 @@ ControllerBase::Candidate ControllerBase::pick_best_ready_from(
   // Scheduler contract: get_best_request() derives req.command before applying
   // filter, so predicates can inspect the current command directly.
   auto eligible = [&](const Request& req) {
+    if (req.pud_dependency && !req.pud_dependency->complete) return false;
     if (req.retry_after > m_clk) return false;
     if (!m_device.managed_refresh_oracle_allows(req.command, req.addr_vec)) return false;
     return !filter || filter(req);
@@ -450,6 +548,26 @@ ControllerBase::Candidate ControllerBase::pick_rw_if(RequestFilterRef filter) {
     });
   }
   return c;
+}
+
+// DDRAM: A blocked dependency or occupied B view must not stop another eligible primitive.
+ControllerBase::Candidate ControllerBase::pick_pud_if() {
+  return pick_best_ready_from(m_pud_buffer, [&](const Request& req) {
+    return !would_close_active(req);
+  });
+}
+
+// DDRAM: Fixed nMRA service keeps this queue ordered; publish readiness before invoking callbacks.
+void ControllerBase::serve_completed_pud() {
+  while (!m_pud_pending.empty() && m_pud_pending.front().depart <= m_clk) {
+    Request req = std::move(m_pud_pending.front());
+    m_pud_pending.pop_front();
+    req.pud_completion->complete = true;
+    auto layout = m_pud_layouts.find(req.layout_id);
+    if (--layout->second.second == 0) m_pud_layouts.erase(layout);
+    s_num_pud_reqs_served++;
+    if (req.callback) req.callback(req);
+  }
 }
 
 bool ControllerBase::would_close_active(const Request& req) const {
@@ -582,6 +700,9 @@ void ControllerBase::finalize() {
 }
 
 void ControllerBase::reset_stats() {
+  // DDRAM: Reset measurement counters without discarding in-flight service/dependency state.
+  s_num_pud_reqs = 0;
+  s_num_pud_reqs_served = 0;
   m_measured_clk = 0;
 
   s_row_hits = 0;

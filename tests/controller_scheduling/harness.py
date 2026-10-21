@@ -112,10 +112,17 @@ class ControllerUnderTest:
     def addr_vec(self, **levels) -> list[int]:
         return build_addr_vec(self.level_names, wildcard=self.ALL, **levels)
 
-    def send_request(self, type_name: str, addr_vec: list[int], source_id: int = 0) -> None:
+    def send_request(self, type_name: str, addr_vec: list[int], source_id: int = 0,
+                     *, dependency: int = -1) -> None:
+        """DDRAM: Submit host traffic with an optional explicit PuD predecessor."""
         if type_name not in self._request_type_ids:
             raise ValueError(f"Unknown request type: {type_name}")
-        self._cpp.send_request(self._request_type_ids[type_name], addr_vec, source_id)
+        self._cpp.send_request(self._request_type_ids[type_name], addr_vec, source_id, dependency)
+
+    def send_pud(self, addr_vec: list[int], *, required_view: int, layout: str,
+                 layout_id: int, layout_version: int, dependency: int = -1) -> int:
+        """DDRAM: Submit a B-local timing-only MRA leaf and return its predecessor handle."""
+        return self._cpp.send_pud(addr_vec, required_view, layout, layout_id, layout_version, dependency)
 
     def priority_send(self, command_name: str, addr_vec: list[int]) -> None:
         if command_name not in self.command_names:

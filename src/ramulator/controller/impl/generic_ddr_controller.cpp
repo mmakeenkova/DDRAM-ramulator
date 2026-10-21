@@ -12,7 +12,7 @@ class GenericDDRController : public ControllerBase {
  public:
   void init() override {
     init_base();
-    // DDRAM: Auto preserves conventional devices and enables TwoView for DDRAM-P.
+    // DDRAM: Auto selects TwoView for DDRAM-P and pins DDRAM-O host traffic to A.
     std::string view_selection;
     RAMULATOR_PARSE_PARAM(view_selection, std::string, "view_selection").default_val("Auto");
     init_view_selection(view_selection);
@@ -118,6 +118,10 @@ void GenericDDRController::tick() {
   }
 
   // 3. If no candidate found, try to schedule from read/write (with write mode check)
+  if (!cand.valid && m_priority_buffer.size() == 0) {
+    // DDRAM: Ready B primitives share arbitration; blocked B work leaves A traffic eligible.
+    cand = pick_pud_if();
+  }
   if (!cand.valid && m_priority_buffer.size() == 0) {
     cand = pick_rw_if();
   }
