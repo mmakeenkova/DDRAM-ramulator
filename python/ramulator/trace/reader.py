@@ -11,6 +11,7 @@ from typing import Iterable, Iterator, Sequence
 @dataclass(frozen=True)
 class TraceHeader:
     version: tuple[int, int]
+    flags: int
     level_count: int
     command_count: int
     timing_count: int
@@ -51,6 +52,14 @@ class TraceEvent:
     cause_event_id: int = -1
     constraint_id: int = -1
     constraint_level: int = -1
+    pud_layout: int = 0
+    required_view: int = -1
+    layout_id: int = -1
+    layout_version: int = -1
+
+    @property
+    def layout(self) -> str | None:
+        return "BitSerial" if self.pud_layout == 1 else None
 
     @property
     def view(self) -> str | None:
@@ -105,12 +114,14 @@ class Trace:
     @staticmethod
     def _read_header(data: bytes) -> TraceHeader:
         major, minor = struct.unpack_from("<BB", data, 8)
+        flags = struct.unpack_from("<H", data, 10)[0]
         level_count, command_count, timing_count = struct.unpack_from("<HHH", data, 12)
         channel_id = struct.unpack_from("<I", data, 24)[0]
         num_entries, data_offset = struct.unpack_from("<QQ", data, 32)
         dram_type = data[48:64].split(b"\0", 1)[0].decode("utf-8")
         return TraceHeader(
             (major, minor),
+            flags,
             level_count,
             command_count,
             timing_count,
@@ -194,6 +205,10 @@ class Trace:
         tie_source_ids: tuple[int, ...] = ()
         tie_constraint_ids: tuple[int, ...] = ()
         tie_levels: tuple[int, ...] = ()
+        pud_layouts = (0,) * count
+        required_views = (-1,) * count
+        layout_ids = (-1,) * count
+        layout_versions = (-1,) * count
         if self.header.version >= (1, 2):
             event_ids = self._array(offset, "q")
             offset += 8 * count
@@ -225,6 +240,15 @@ class Trace:
                 tie_constraint_ids = self._array_count(offset, "i", tie_count)
                 offset += 4 * tie_count
                 tie_levels = self._array_count(offset, "h", tie_count)
+                offset += 2 * tie_count
+            if self.header.version >= (1, 4) and self.header.flags & 4:
+                pud_layouts = self._array(offset, "b")
+                offset += count
+                required_views = self._array(offset, "b")
+                offset += count
+                layout_ids = self._array(offset, "q")
+                offset += 8 * count
+                layout_versions = self._array(offset, "q")
 
         self._tie_offsets = tie_offsets
         self._tie_source_ids = tie_source_ids
@@ -255,6 +279,10 @@ class Trace:
                     cause_ids[i],
                     constraint_ids[i],
                     constraint_levels[i],
+                    pud_layouts[i],
+                    required_views[i],
+                    layout_ids[i],
+                    layout_versions[i],
                 )
             )
         return tuple(events)

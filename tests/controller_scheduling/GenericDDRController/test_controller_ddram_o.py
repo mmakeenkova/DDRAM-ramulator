@@ -4,6 +4,7 @@ import pytest
 
 import ramulator
 import tests.controller_scheduling.harness as cs
+from ramulator.trace import Trace
 from tests.device_timings.harness import DeviceUnderTest
 
 pytestmark = [pytest.mark.controller_scheduling, pytest.mark.ddram_o]
@@ -335,3 +336,27 @@ def test_pud_queue_backpressure_does_not_freeze_rejected_layout():
 def test_rejects_out_of_bounds_b_target(pud_dut):
     with pytest.raises(RuntimeError, match="B-local address is out of bounds"):
         send_mra(pud_dut, row=1 << 30)
+
+
+# DDRAM: Recorder metadata lets the visualizer group the prerequisite chain and
+# annotate every command with the PuD layout on which the operation acts.
+def test_binary_trace_records_pud_operation_metadata(tmp_path):
+    prefix = tmp_path / "ddram_o"
+    dut = cs.ControllerUnderTest.make_generic_ddr(
+        ramulator.dram.DDRAM_O(
+            org_preset="DDR5_16Gb_x8", timing_preset="DDR5_3200AN", nMRA=12),
+        controller_plugins=[ramulator.controller_plugin.BinTraceRecorder(
+            path=str(prefix), dram_type="DDRAM_O", record_equal_constraints=True)],
+        )
+    dut.priority_send("ACT_B", address(dut, row=9))
+    dut.run_until_idle(2048)
+    request_id = send_mra(dut, layout_id=17, layout_version=4)
+    dut.run_until_idle(2048)
+    dut.stats()  # Finalizes controller plugins and flushes the trace.
+
+    trace = Trace.open(tmp_path / "ddram_o.ch0.ram2bin")
+    chain = trace.request_chain(request_id)
+    assert [event.command for event in chain] == ["PRE_B", "MRA_B"]
+    assert all(event.view == "B" and event.layout == "BitSerial" for event in chain)
+    assert all((event.required_view, event.layout_id, event.layout_version) == (1, 17, 4)
+               for event in chain)

@@ -12,7 +12,7 @@ make -C spec
 Current documents:
 
 - `ddram_o_milestone1.tex` / `ddram_o_milestone1.pdf`: simplified DDRAM-O
-  device and timing model for Milestone 1. Revision 0.6 / timing ledger M1-P1
+  device and timing model for Milestone 1. Revision 0.7 / timing ledger M1-P1
   inherits Pumulator's SIMDRAM AP/AAP assumptions from the supplied
   `pumulator_infra_all` snapshot at commit `8fd8bd6f`. Source paths and the
   limits of that inheritance are recorded in the document.
@@ -79,6 +79,14 @@ dut.send_pud(
 Layout tags and versions are checked, but physical operand placement and data
 values are not yet modeled. Compound arithmetic, general dependency graphs,
 and conversion remain future work; ordinary host traffic remains pinned to A.
+
+Revision 0.7 expands the implemented controller queueing contract. It records
+the active, priority, PuD, and host arbitration order; FR-FCFS eligibility and
+bypass behavior; PRE-to-MRA prerequisite residency; the separate MRA service
+completion deque; and the distinction between admission, timing readiness,
+command issue, and completion. It also explains why deliberate phase gaps in
+the DDRAM-O visualizer trace are admission slack rather than extra device
+timing.
 
 The `.aux`, `.log`, `.out`, and table-of-contents files are build artifacts and
 are not retained.

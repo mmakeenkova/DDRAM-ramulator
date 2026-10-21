@@ -1,5 +1,5 @@
 /*
- * RAM2BIN v1.3 — Ramulator2 Binary Command Trace
+ * RAM2BIN v1.4 — Ramulator2 Binary Command Trace
  * ==============================================
  *
  * A self-describing, Structure-of-Arrays binary trace format for DRAM
@@ -37,6 +37,8 @@
  * +-----------------------------+
  * | tied causes (optional v1.3) |  <- CSR offsets + all equal strictest causes
  * +-----------------------------+
+ * | operation metadata (v1.4)   |  <- PuD layout and required-view arrays
+ * +-----------------------------+
  *
  * N = num_entries, L = level_count.
  * Total data size = N * (8 + 8 + 1 + 1 + 2 + 4*L) = N * (20 + 4*L).
@@ -49,7 +51,7 @@
  * +------------------+--------+--------+-----------------------------------------------+
  * | magic            |  0     |  8B    | "RAM2BIN\0" (null-terminated, zero-padded)    |
  * | version          |  8     |  2B    | [major, minor] file format version            |
- * | flags            | 10     |  2B    | bit 0: diagnostics; bit 1: equal causes       |
+ * | flags            | 10     |  2B    | bit 0: diagnostics; bit 1: ties; bit 2: PuD metadata |
  * | level_count      | 12     |  2B    | uint16  Number of hierarchy levels            |
  * | command_count    | 14     |  2B    | uint16  Number of command types               |
  * | timing_count     | 16     |  2B    | uint16  Number of timing parameters           |
@@ -150,6 +152,11 @@
  * | tie_cons[]    |  4B int32 | M constraint-table indices (optional v1.3)          |
  * | tie_level[]   |  2B int16 | M hierarchy levels (optional v1.3)                  |
  * +---------------+-----------+---------------------------------------------------+
+ * | pud_layout[]  |  1B int8  | 0=unspecified, 1=bit-serial (v1.4)                  |
+ * | required_view |  1B int8  | -1=unspecified, 0=A, 1=B (v1.4)                    |
+ * | layout_id[]   |  8B int64 | Logical data-layout identity (v1.4)                 |
+ * | layout_ver[]  |  8B int64 | Version of the logical data layout (v1.4)           |
+ * +---------------+-----------+---------------------------------------------------+
  *
  * D = data_offset, N = num_entries, L = level_count
  *
@@ -170,8 +177,10 @@
  * - All strings are ASCII, null-terminated.
  * - One file per channel; path is suffixed with ".ch0", ".ch1", etc.
  * - v1.0/v1.1 data size is N * (20 + 4*L); v1.2 appends 44N diagnostic bytes.
- * - v1.3 is emitted only when record_equal_constraints=true and appends
- *   8(N+1) + 14M bytes, where M is the number of equally strict causes.
+ * - v1.3 appends 8(N+1) + 14M bytes, where M is the number of equally strict causes.
+ * - v1.4 always emits the CSR offsets (even when M=0), then appends 18N bytes
+ *   of PuD operation metadata. This lets v1.3 readers decode the known prefix
+ *   and safely ignore the new tail.
  */
 
 #include <cstdint>
@@ -237,6 +246,10 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     m_final_cmd_buf.push_back(static_cast<int16_t>(req.final_command));
     m_selected_view_buf.push_back(static_cast<int8_t>(req.selected_view));
     m_view_committed_buf.push_back(req.view_committed ? 1u : 0u);
+    m_pud_layout_buf.push_back(static_cast<int8_t>(req.pud_layout));
+    m_required_view_buf.push_back(static_cast<int8_t>(req.required_view));
+    m_layout_id_buf.push_back(req.layout_id);
+    m_layout_version_buf.push_back(req.layout_version);
     const auto& cause = m_ctrl->m_device.m_last_issue_timing_cause;
     m_ready_at_buf.push_back(cause.ready_at);
     m_cause_event_buf.push_back(cause.source_event_id);
@@ -276,6 +289,10 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     m_cause_event_buf = {};
     m_constraint_id_buf = {};
     m_constraint_level_buf = {};
+    m_pud_layout_buf = {};
+    m_required_view_buf = {};
+    m_layout_id_buf = {};
+    m_layout_version_buf = {};
     m_tie_offsets = {};
     m_tie_source_event_buf = {};
     m_tie_constraint_id_buf = {};
@@ -314,6 +331,11 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
   std::vector<int64_t> m_tie_source_event_buf;
   std::vector<int32_t> m_tie_constraint_id_buf;
   std::vector<int16_t> m_tie_level_buf;
+  // v1.4 PuD operation metadata. Conventional requests retain neutral values.
+  std::vector<int8_t> m_pud_layout_buf;
+  std::vector<int8_t> m_required_view_buf;
+  std::vector<int64_t> m_layout_id_buf;
+  std::vector<int64_t> m_layout_version_buf;
 
   // ── Header ────────────────────────────────────────────────────────
 
@@ -341,8 +363,8 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     Header h{};
     std::memcpy(h.magic, "RAM2BIN", 8);
     h.version[0]    = 1;
-    h.version[1]    = m_record_equal_constraints ? 3 : 2;
-    h.flags         = 1u | (m_record_equal_constraints ? 2u : 0u);
+    h.version[1]    = 4;
+    h.flags         = 1u | (m_record_equal_constraints ? 2u : 0u) | 4u;
     h.level_count   = static_cast<uint16_t>(spec.level_count);
     h.command_count = static_cast<uint16_t>(spec.command_count);
     h.timing_count  = static_cast<uint16_t>(spec.timing_count);
@@ -432,12 +454,16 @@ class BinTraceRecorder : public IControllerPlugin, public Implementation {
     write_array(m_cause_event_buf);
     write_array(m_constraint_id_buf);
     write_array(m_constraint_level_buf);
-    if (m_record_equal_constraints) {
-      write_array(m_tie_offsets);
-      write_array(m_tie_source_event_buf);
-      write_array(m_tie_constraint_id_buf);
-      write_array(m_tie_level_buf);
-    }
+    // v1.4 always writes the CSR offsets. With equal-cause recording disabled,
+    // all offsets are zero and existing v1.3 readers still decode the prefix.
+    write_array(m_tie_offsets);
+    write_array(m_tie_source_event_buf);
+    write_array(m_tie_constraint_id_buf);
+    write_array(m_tie_level_buf);
+    write_array(m_pud_layout_buf);
+    write_array(m_required_view_buf);
+    write_array(m_layout_id_buf);
+    write_array(m_layout_version_buf);
   }
 
   // ── I/O helpers ───────────────────────────────────────────────────

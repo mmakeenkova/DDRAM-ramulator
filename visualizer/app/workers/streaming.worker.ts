@@ -38,6 +38,9 @@ function buildLaneIndices(
   strides: number[],
   depth: number,
   N: number,
+  selectedView: Int8Array,
+  commandNames: string[],
+  cmdId: Uint8Array,
 ): Uint16Array {
   const out = new Uint16Array(N);
   for (let i = 0; i < N; i++) {
@@ -46,7 +49,13 @@ function buildLaneIndices(
       const a = addr[k]![i]!;
       if (a >= 0) flat += a * strides[k]!;
     }
-    out[i] = flat;
+    let view = selectedView[i] ?? -1;
+    if (view !== 0 && view !== 1) {
+      const name = commandNames[cmdId[i] ?? -1]?.toUpperCase() ?? '';
+      if (/(?:^|_)A$/.test(name)) view = 0;
+      else if (/(?:^|_)B$/.test(name)) view = 1;
+    }
+    out[i] = flat * 3 + (view === 0 || view === 1 ? view : 2);
   }
   return out;
 }
@@ -310,7 +319,10 @@ self.onmessage = (event) => {
   } = event.data;
 
   const cmdRelClk = buildRelativeClocks(arrays.clk, N, referenceTime);
-  const cmdLaneIdx = buildLaneIndices(arrays.addr, cmdStrides, structDepth, N);
+  const cmdLaneIdx = buildLaneIndices(
+    arrays.addr, cmdStrides, structDepth, N,
+    arrays.selectedView, spec.commandNames, arrays.cmdId,
+  );
 
   const dataNBL = getTimingValue(spec, 'nBL', 4);
   const dataBus = buildDataBusArrays(arrays, spec, dataStrides, structDepth, N, referenceTime);

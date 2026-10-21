@@ -56,6 +56,9 @@ function computeStridesForLayout(levelSizes: Uint32Array, depth: number) {
 const uiStore = useUIStore();
 const sessionStore = useSessionStore();
 const treeContainer = ref<HTMLElement | null>(null);
+const supportsViewLanes = computed(() => sessionStore.spec?.commandNames.some(
+  name => /(?:^|_)[AB]$/i.test(name),
+) ?? false);
 
 const structuralDepth = computed(() => {
   const names = sessionStore.spec?.levelNames;
@@ -211,6 +214,10 @@ function updateLayout() {
         const stacks = flat < depths.length ? (depths[flat] ?? 1) : 1;
         const h = stacks * ROW_HEIGHT + Math.max(0, stacks - 1) * STACK_ROW_GAP;
         el.style.minHeight = `${Math.max(1, h)}px`;
+      }
+      else if (uiStore.viewMode === 'command' && busType === 'command'
+        && uiStore.splitViewLanes && supportsViewLanes.value) {
+        el.style.minHeight = `${ROW_HEIGHT * 2 + STACK_ROW_GAP}px`;
       }
       else {
         el.style.minHeight = '';

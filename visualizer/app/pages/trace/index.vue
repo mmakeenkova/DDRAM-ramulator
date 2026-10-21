@@ -231,6 +231,9 @@
               <span class="text-zinc-500">view</span> {{ viewName(hoveredEvent.selectedView) }}
             </span>
           </div>
+          <div v-if="hoveredLayoutLabel">
+            <span class="text-zinc-500">data layout</span> {{ hoveredLayoutLabel }}
+          </div>
         </div>
       </template>
 
@@ -279,6 +282,12 @@
             <span class="text-zinc-500">final</span> {{ sessionStore.getCommandName(hoveredEvent.finalCmdId) }}
           </span>
           <span v-if="hoveredEvent.viewCommitted" class="ml-2 text-amber-300">committed</span>
+        </div>
+        <div v-if="hoveredLayoutLabel" class="mt-2 pt-1.5 border-t border-zinc-700/50 text-xs font-mono">
+          <div><span class="text-zinc-500">data layout</span> {{ hoveredLayoutLabel }}</div>
+          <div v-if="hoveredEvent.requiredView != null && hoveredEvent.requiredView >= 0">
+            <span class="text-zinc-500">required view</span> {{ viewName(hoveredEvent.requiredView) }}
+          </div>
         </div>
         <div v-if="hoveredAutoPrecharge" class="mt-2 pt-1.5 border-t border-zinc-700/50 text-xs font-mono">
           <div>
@@ -457,6 +466,16 @@ const hoveredAutoPrecharge = computed(() => {
   return phases
     ? { ...phases, readyClk: event.clk + BigInt(phases.totalCycles) }
     : null;
+});
+
+const hoveredLayoutLabel = computed(() => {
+  const event = hoveredEvent.value;
+  if (!event || event.pudLayout == null || event.pudLayout === 0) return null;
+  const kind = event.pudLayout === 1 ? 'Bit-serial' : `Layout ${event.pudLayout}`;
+  if (event.layoutId == null || event.layoutId < 0n) return kind;
+  return event.layoutVersion != null && event.layoutVersion >= 0n
+    ? `${kind} · layout ${event.layoutId} v${event.layoutVersion}`
+    : `${kind} · layout ${event.layoutId}`;
 });
 
 const tooltipStyle = computed(() => {

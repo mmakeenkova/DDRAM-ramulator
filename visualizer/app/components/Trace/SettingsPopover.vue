@@ -61,6 +61,26 @@
         <div class="rounded-lg bg-zinc-900/50 border border-zinc-800/80 divide-y divide-zinc-800/80">
           <div class="flex items-center gap-3 px-3 py-2.5">
             <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-zinc-200">Split view A/B lanes</p>
+              <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                Places view-specific commands on separate command-bus lanes; the data bus remains shared.
+              </p>
+            </div>
+            <USwitch v-model="splitViewLanes" :disabled="!supportsViewLanes" aria-label="Split DDRAM view lanes" />
+          </div>
+
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-zinc-200">Color by operation</p>
+              <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
+                Gives every command in one controller request the same deterministic color.
+              </p>
+            </div>
+            <USwitch v-model="colorByOperation" aria-label="Color commands by controller request" />
+          </div>
+
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <div class="min-w-0 flex-1">
               <p class="text-xs font-medium text-zinc-200">Highlight row hits</p>
               <p class="mt-0.5 text-[11px] text-zinc-500 leading-snug">
                 Draws a dashed lime box around accesses that required no activation.
@@ -99,6 +119,9 @@ const uiStore = useUIStore();
 const sessionStore = useSessionStore();
 
 const tCKPs = computed(() => sessionStore.getTimingValue('tCK_ps'));
+const supportsViewLanes = computed(() => sessionStore.spec?.commandNames.some(
+  name => /(?:^|_)[AB]$/i.test(name),
+) ?? false);
 
 const displayTimelineInNs = computed({
   get: () => uiStore.displayTimelineInNs,
@@ -118,5 +141,15 @@ const colorByView = computed({
 const showAutoPrecharge = computed({
   get: () => uiStore.showAutoPrecharge,
   set: (value: boolean) => uiStore.setShowAutoPrecharge(value),
+});
+
+const splitViewLanes = computed({
+  get: () => uiStore.splitViewLanes,
+  set: (value: boolean) => uiStore.setSplitViewLanes(value),
+});
+
+const colorByOperation = computed({
+  get: () => uiStore.colorByOperation,
+  set: (value: boolean) => uiStore.setColorByOperation(value),
 });
 </script>

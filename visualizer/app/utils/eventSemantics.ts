@@ -70,6 +70,25 @@ export function eventView(arrays: TraceArrays, spec: TraceSpec, index: number): 
   return -1;
 }
 
+/** Human-readable DDRAM-O data-layout contract carried by a request. */
+export function eventLayoutLabel(arrays: TraceArrays, index: number): string | null {
+  const layout = arrays.pudLayout[index] ?? 0;
+  if (layout === 0) return null;
+  const kind = layout === 1 ? 'Bit-serial' : `Layout ${layout}`;
+  const id = arrays.layoutId[index] ?? -1n;
+  const version = arrays.layoutVersion[index] ?? -1n;
+  if (id < 0n) return kind;
+  return version >= 0n ? `${kind} · layout ${id} v${version}` : `${kind} · layout ${id}`;
+}
+
+export function eventLayoutShortLabel(arrays: TraceArrays, index: number): string | null {
+  if ((arrays.pudLayout[index] ?? 0) !== 1) return null;
+  const id = arrays.layoutId[index] ?? -1n;
+  const version = arrays.layoutVersion[index] ?? -1n;
+  if (id < 0n) return 'BS';
+  return version >= 0n ? `BS L${id}v${version}` : `BS L${id}`;
+}
+
 function timingValue(spec: TraceSpec, name: string): number | null {
   const index = spec.timingNames.indexOf(name);
   return index >= 0 ? spec.timingValues[index] ?? null : null;

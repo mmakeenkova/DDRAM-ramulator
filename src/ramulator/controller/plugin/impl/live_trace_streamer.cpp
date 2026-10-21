@@ -71,6 +71,10 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
     m_final_cmd_buf.push_back(static_cast<int16_t>(req.final_command));
     m_selected_view_buf.push_back(static_cast<int8_t>(req.selected_view));
     m_view_committed_buf.push_back(req.view_committed ? 1 : 0);
+    m_pud_layout_buf.push_back(static_cast<int8_t>(req.pud_layout));
+    m_required_view_buf.push_back(static_cast<int8_t>(req.required_view));
+    m_layout_id_buf.push_back(req.layout_id);
+    m_layout_version_buf.push_back(req.layout_version);
     const auto& cause = m_ctrl->m_device.m_last_issue_timing_cause;
     m_ready_at_buf.push_back(cause.ready_at);
     m_cause_event_id_buf.push_back(cause.source_event_id);
@@ -136,6 +140,10 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
   std::vector<int64_t> m_cause_event_id_buf;
   std::vector<int32_t> m_constraint_id_buf;
   std::vector<int16_t> m_constraint_level_buf;
+  std::vector<int8_t> m_pud_layout_buf;
+  std::vector<int8_t> m_required_view_buf;
+  std::vector<int64_t> m_layout_id_buf;
+  std::vector<int64_t> m_layout_version_buf;
   std::vector<std::vector<int32_t>> m_addr_bufs;
 
   clock::time_point m_last_flush_time;
@@ -209,7 +217,7 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
   void send_init(const DRAMSpec& spec) {
     auto body = fmt::format(
         R"({{"type":"init",)"
-        R"("header":{{"version":[1,2],)"
+        R"("header":{{"version":[1,4],"flags":4,)"
         R"("levelCount":{},"commandCount":{},"timingCount":{},)"
         R"("channelWidth":{},"prefetchSize":{},"dq":{},)"
         R"("channelId":{},"readLatency":{},"dramType":"{}"}},)"
@@ -239,10 +247,12 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
       events += fmt::format(
           R"({{"clk":{},"arrive":{},"cmdId":{},"typeId":{},"sourceId":{},)"
           R"("eventId":{},"requestId":{},"finalCmdId":{},"selectedView":{},"viewCommitted":{},)"
+          R"("pudLayout":{},"requiredView":{},"layoutId":{},"layoutVersion":{},)"
           R"("readyAt":{},"causeEventId":{},"constraintId":{},"constraintLevel":{},"addr":[)",
           m_clk_buf[i], m_arrive_buf[i], m_cmd_buf[i], m_type_buf[i], m_source_buf[i],
           m_event_id_buf[i], m_request_id_buf[i], m_final_cmd_buf[i], m_selected_view_buf[i],
-          m_view_committed_buf[i] ? "true" : "false", m_ready_at_buf[i], m_cause_event_id_buf[i],
+          m_view_committed_buf[i] ? "true" : "false", m_pud_layout_buf[i], m_required_view_buf[i],
+          m_layout_id_buf[i], m_layout_version_buf[i], m_ready_at_buf[i], m_cause_event_id_buf[i],
           m_constraint_id_buf[i], m_constraint_level_buf[i]);
       for (int k = 0; k < m_level_count; k++) {
         if (k) events += ',';
@@ -272,6 +282,10 @@ class LiveTraceStreamer : public IControllerPlugin, public Implementation {
     m_cause_event_id_buf.clear();
     m_constraint_id_buf.clear();
     m_constraint_level_buf.clear();
+    m_pud_layout_buf.clear();
+    m_required_view_buf.clear();
+    m_layout_id_buf.clear();
+    m_layout_version_buf.clear();
     for (auto& buf : m_addr_bufs) buf.clear();
   }
 

@@ -66,7 +66,7 @@
   \vspace{0.2em}
   {\large Simplified Orthogonal-View Device and Timing Model}\\
   \vspace{0.35em}
-  {\small DDRAM Project \hfill Revision 0.6 --- 21 October 2026}
+  {\small DDRAM Project \hfill Revision 0.7 --- 21 October 2026}
 \end{center}
 \vspace{2pt}
 \noindent\fcolorbox{DDRAMBlue}{DDRAMGrey}{%
@@ -619,19 +619,6 @@ alias of a buffered write applies admission backpressure until a safe retry.
 The producer must still describe logical dependencies explicitly; the
 timing-only controller does not infer shared-cell conflicts from layout IDs.
 
-MRA leaves use a separate bounded queue (capacity equal to
-\cmd{read\_buffer\_size}) and a separate pending-service queue. Arbitration
-is active requests, then priority maintenance, then ready PuD leaves, then
-host read/write traffic. A blocked PuD leaf does not block an independent
-ready leaf or host traffic, except for existing priority-maintenance rules.
-B ownership begins at the first successful PRE/MRA issue and ends at MRA
-issue; device timing protects B during subsequent service. An issued leaf
-completes at issue plus \param{nMRA}, publishes its token, and invokes its
-callback. PuD counters \cmd{num\_pud\_reqs} and
-\cmd{num\_pud\_reqs\_served} count admitted and service-completed leaves;
-they do not contribute to read latency or maintenance counts. Direct
-priority-queue MRA submission is rejected; A-view PuD remains deferred.
-
 The layout/operation mapping produces an immutable \emph{required view} for
 each primitive in the initial integration: A for ordinary host reads/writes,
 B for bit-serial PuD leaves. This requirement is distinct from the existing
@@ -646,6 +633,128 @@ The address mapper resolves targets in the required view's coordinate system.
 The controller validates the contract and maps commands; the scheduler ranks
 eligible requests. The DRAM device remains responsible for prerequisites,
 state transitions, and timing checks.
+
+\subsection{Queue organization and arbitration}
+\label{sec:controller-queues}
+
+Queues are local to one memory channel; there is no PuD queue per bank or per
+view. The controller uses five schedulable request buffers and two
+completion-only deques:
+
+\begin{center}
+\small
+\begin{tabularx}{\columnwidth}{@{}p{0.31\columnwidth}X@{}}
+\toprule
+Structure & Purpose \\
+\midrule
+\cmd{read\_buffer} & Admitted host reads. \\
+\cmd{write\_buffer} & Admitted host writes; existing forwarding and
+coalescing rules still apply. \\
+\cmd{pud\_buffer} & Admitted timing-level PuD leaves for all banks in the
+channel. Its capacity equals \cmd{read\_buffer\_size}, 32 by default. \\
+\cmd{priority\_buffer} & Controller-issued maintenance and explicit direct
+commands. MRA is not legal on this path. \\
+\cmd{active\_buffer} & Host requests that have issued an opening prerequisite
+and must finish their activation-to-access sequence. \\
+\cmd{pending} & Issued reads waiting for their data-return deadline; not
+schedulable. \\
+\cmd{pud\_pending} & Issued MRA leaves waiting for internal service completion;
+not schedulable. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The buffers are insertion-ordered lists, but the schedulable demand and PuD
+buffers are not strict FIFOs. In each controller cycle, at most one external
+DRAM command is selected in the following class order:
+
+\begin{equation}
+  \text{active} \;>\; \text{priority} \;>\; \text{PuD}
+  \;>\; \text{host read/write}.
+\end{equation}
+
+The active class preserves progress for a request whose opening sequence has
+already begun. The priority class examines only its head. Consequently, a
+nonempty but timing-blocked priority buffer prevents PuD and host arbitration,
+although a ready active request may still issue first. Read/write selection
+retains the existing watermark-controlled write-drain mode.
+
+Within a demand or PuD buffer, FR-FCFS prepares every request, removes
+ineligible entries from consideration, prefers a timing-ready command, and
+breaks equal-readiness ties by request arrival time. Eligibility includes an
+explicit dependency being complete, expiration of any retry delay, managed
+refresh permission, and protection of in-flight active sequences. Therefore,
+an older blocked PuD leaf does not prevent an independent younger ready leaf
+from issuing. If no PuD leaf is issuable, arbitration proceeds to host
+traffic. \cmd{FRFCFS-ViewAware} additionally protects legal view-local row
+hits from destructive closes; an atomic MRA has no persistent row-hit state,
+so PuD-leaf ordering normally reduces to readiness and age.
+
+Admission, DRAM readiness, issue, and completion are distinct times. Let
+$t_a$ be queue admission, $t_r$ the earliest cycle permitted by DRAM timing,
+$t_i$ actual command issue, and $t_c$ service completion. They obey
+
+\begin{equation}
+  t_i \ge \max(t_a,t_r), \qquad
+  t_c = t_i + \param{nMRA}
+\end{equation}
+
+for the implemented fixed-latency MRA leaf. Scheduler competition may make the
+first inequality strict. A trace timing arrow records the constraint that
+determines $t_r$; it does not assert that the target request was already
+queued. Visible distance after an arrow's minimum endpoint may therefore be
+admission slack or arbitration slack rather than an unmodelled device delay.
+
+\subsection{PuD queue lifecycle}
+
+Admission through \cmd{send\_pud()} validates the B-local address, required
+view, bit-serial layout, identity/version, and predecessor token before
+appending the request to \cmd{pud\_buffer}. A full buffer applies backpressure.
+Every scheduler scan then derives the request's current command from the
+device state:
+
+\begin{equation}
+\begin{aligned}
+  \viewB\text{ closed:} && \cmd{PudMRA} &\rightarrow \cmd{MRA\_B},\\
+  \viewB\text{ open:}   && \cmd{PudMRA} &\rightarrow \cmd{PRE\_B}
+      \rightarrow \cmd{MRA\_B}.
+\end{aligned}
+\end{equation}
+
+An issued \cmd{PRE\_B} is a prerequisite of the same request. The request
+stays in \cmd{pud\_buffer}, retains its decoded coordinates and committed
+view, and is reconsidered until \cmd{MRA\_B} becomes ready after \param{nRP}.
+It does not enter \cmd{active\_buffer}: PRE is closing, while MRA is an atomic
+operation that intentionally leaves no conventional row open.
+
+When the final \cmd{MRA\_B} issues at $t_i$, the request leaves the schedulable
+buffer and enters \cmd{pud\_pending} with departure time
+$t_i+\param{nMRA}$. Controller view-selection ownership ends at MRA issue, but
+the device timing ledger prevents same-view use during the remaining service
+interval. The other view may progress once \param{nXACTO} and all shared
+constraints permit it. At departure, the controller marks the shared
+completion token complete, releases the outstanding layout reference, updates
+the served counter, and invokes the callback. A consumer carrying that token
+is ineligible until this point, not merely until MRA issue. Fixed \param{nMRA}
+makes \cmd{pud\_pending} completion-ordered; this deque is never examined by
+the command scheduler.
+
+PuD counters \cmd{num\_pud\_reqs} and \cmd{num\_pud\_reqs\_served} count
+admitted and service-completed leaves, respectively. They do not contribute
+to read latency or maintenance counts. Direct priority-queue MRA submission
+is rejected because it would bypass metadata validation, dependency tracking,
+and delayed service completion. A-view PuD remains deferred.
+
+\paragraph{Cross-view trace example.}
+The development trace intentionally separates phases. Its first
+\cmd{PRE\_A} is admitted only after earlier reads drain, although
+\param{nRAS} made it timing-ready sooner. Likewise, the second \cmd{MRA\_B}
+is admitted after an explicit \param{nRP} delay, long after the preceding
+MRA's \param{nMRA} bound has expired. Those gaps are admission slack. The
+subsequent \cmd{MRA\_B}$\rightarrow$\cmd{ACT\_A} gap is instead tight device
+timing: \cmd{ACT\_A} issues exactly \param{nXACTO} cycles after MRA. The
+example must not be interpreted as evidence that the scheduler held an
+already-ready PRE or MRA for the entire visible gap.
 
 \subsection{Command mapping and scheduling pipeline}
 

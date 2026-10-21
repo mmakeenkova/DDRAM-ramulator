@@ -37,6 +37,10 @@ interface StreamEvent {
   finalCmdId?: number;
   selectedView?: number;
   viewCommitted?: boolean;
+  pudLayout?: number;
+  requiredView?: number;
+  layoutId?: number;
+  layoutVersion?: number;
   readyAt?: number;
   causeEventId?: number;
   constraintId?: number;
@@ -54,6 +58,7 @@ interface StreamHeader {
   channelId: number;
   readLatency: number;
   dramType: string;
+  flags?: number;
 }
 
 interface StreamSpec {
@@ -86,6 +91,10 @@ let _readyAtBuf = new BigInt64Array(0);
 let _causeEventIdBuf = new BigInt64Array(0);
 let _constraintIdBuf = new Int32Array(0);
 let _constraintLevelBuf = new Int16Array(0);
+let _pudLayoutBuf = new Int8Array(0);
+let _requiredViewBuf = new Int8Array(0);
+let _layoutIdBuf = new BigInt64Array(0);
+let _layoutVersionBuf = new BigInt64Array(0);
 let _addrBufs: Int32Array[] = [];
 
 /** Cached TraceSpec (does not change during a session). */
@@ -110,6 +119,10 @@ function _growBuffers(minCapacity: number) {
   const newCauseEventId = new BigInt64Array(cap); newCauseEventId.fill(-1n);
   const newConstraintId = new Int32Array(cap); newConstraintId.fill(-1);
   const newConstraintLevel = new Int16Array(cap); newConstraintLevel.fill(-1);
+  const newPudLayout = new Int8Array(cap);
+  const newRequiredView = new Int8Array(cap); newRequiredView.fill(-1);
+  const newLayoutId = new BigInt64Array(cap); newLayoutId.fill(-1n);
+  const newLayoutVersion = new BigInt64Array(cap); newLayoutVersion.fill(-1n);
 
   if (_count > 0) {
     newClk.set(_clkBuf.subarray(0, _count));
@@ -126,6 +139,10 @@ function _growBuffers(minCapacity: number) {
     newCauseEventId.set(_causeEventIdBuf.subarray(0, _count));
     newConstraintId.set(_constraintIdBuf.subarray(0, _count));
     newConstraintLevel.set(_constraintLevelBuf.subarray(0, _count));
+    newPudLayout.set(_pudLayoutBuf.subarray(0, _count));
+    newRequiredView.set(_requiredViewBuf.subarray(0, _count));
+    newLayoutId.set(_layoutIdBuf.subarray(0, _count));
+    newLayoutVersion.set(_layoutVersionBuf.subarray(0, _count));
     for (let k = 0; k < _levelCount; k++) {
       const newAddr = new Int32Array(cap);
       newAddr.set(_addrBufs[k]!.subarray(0, _count));
@@ -149,6 +166,10 @@ function _growBuffers(minCapacity: number) {
   _causeEventIdBuf = newCauseEventId;
   _constraintIdBuf = newConstraintId;
   _constraintLevelBuf = newConstraintLevel;
+  _pudLayoutBuf = newPudLayout;
+  _requiredViewBuf = newRequiredView;
+  _layoutIdBuf = newLayoutId;
+  _layoutVersionBuf = newLayoutVersion;
   _capacity = cap;
 }
 
@@ -170,6 +191,10 @@ function _resetBuffers(levelCount: number) {
   _causeEventIdBuf = new BigInt64Array(0);
   _constraintIdBuf = new Int32Array(0);
   _constraintLevelBuf = new Int16Array(0);
+  _pudLayoutBuf = new Int8Array(0);
+  _requiredViewBuf = new Int8Array(0);
+  _layoutIdBuf = new BigInt64Array(0);
+  _layoutVersionBuf = new BigInt64Array(0);
   _addrBufs = Array.from({ length: levelCount }, () => new Int32Array(0));
   _cachedSpec = null;
 }
@@ -195,6 +220,10 @@ function _appendEvents(events: StreamEvent[]) {
     _causeEventIdBuf[j] = BigInt(e.causeEventId ?? -1);
     _constraintIdBuf[j] = e.constraintId ?? -1;
     _constraintLevelBuf[j] = e.constraintLevel ?? -1;
+    _pudLayoutBuf[j] = e.pudLayout ?? 0;
+    _requiredViewBuf[j] = e.requiredView ?? -1;
+    _layoutIdBuf[j] = BigInt(e.layoutId ?? -1);
+    _layoutVersionBuf[j] = BigInt(e.layoutVersion ?? -1);
     for (let k = 0; k < _levelCount; k++) {
       _addrBufs[k]![j] = e.addr[k] ?? 0;
     }
@@ -247,13 +276,17 @@ function _buildTrace(header: StreamHeader, spec: StreamSpec, copyArrays = false)
     causeEventId: copyArrays ? new BigInt64Array(_causeEventIdBuf.subarray(0, N)) : _causeEventIdBuf.subarray(0, N),
     constraintId: copyArrays ? new Int32Array(_constraintIdBuf.subarray(0, N)) : _constraintIdBuf.subarray(0, N),
     constraintLevel: copyArrays ? new Int16Array(_constraintLevelBuf.subarray(0, N)) : _constraintLevelBuf.subarray(0, N),
+    pudLayout: copyArrays ? new Int8Array(_pudLayoutBuf.subarray(0, N)) : _pudLayoutBuf.subarray(0, N),
+    requiredView: copyArrays ? new Int8Array(_requiredViewBuf.subarray(0, N)) : _requiredViewBuf.subarray(0, N),
+    layoutId: copyArrays ? new BigInt64Array(_layoutIdBuf.subarray(0, N)) : _layoutIdBuf.subarray(0, N),
+    layoutVersion: copyArrays ? new BigInt64Array(_layoutVersionBuf.subarray(0, N)) : _layoutVersionBuf.subarray(0, N),
     tieOffsets: new BigUint64Array(N + 1),
     tieSourceEventId: new BigInt64Array(0),
     tieConstraintId: new Int32Array(0),
     tieConstraintLevel: new Int16Array(0),
   };
 
-  const traceHeader: TraceHeader = { ...header, numEntries: N, dataOffset: 0 };
+  const traceHeader: TraceHeader = { ...header, flags: header.flags ?? 0, numEntries: N, dataOffset: 0 };
   return { buffer: new ArrayBuffer(0), header: traceHeader, spec: _cachedSpec, arrays };
 }
 

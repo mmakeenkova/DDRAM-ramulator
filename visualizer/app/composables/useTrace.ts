@@ -3,6 +3,7 @@ const HEADER_SIZE = 64;
 
 export interface TraceHeader {
   version: [number, number];
+  flags: number;
   levelCount: number;
   commandCount: number;
   timingCount: number;
@@ -64,6 +65,11 @@ export interface TraceArrays {
   causeEventId: BigInt64Array;
   constraintId: Int32Array;
   constraintLevel: Int16Array;
+  /** Request::PudLayout: 0=unspecified, 1=bit-serial. */
+  pudLayout: Int8Array;
+  requiredView: Int8Array;
+  layoutId: BigInt64Array;
+  layoutVersion: BigInt64Array;
   /** CSR offsets into the tied-cause arrays; length is event count + 1. */
   tieOffsets: BigUint64Array;
   tieSourceEventId: BigInt64Array;
@@ -106,6 +112,7 @@ function parseHeader(view: DataView): TraceHeader {
 
   return {
     version: [view.getUint8(8), view.getUint8(9)],
+    flags: view.getUint16(10, true),
     levelCount: view.getUint16(12, true),
     commandCount: view.getUint16(14, true),
     timingCount: view.getUint16(16, true),
@@ -219,6 +226,10 @@ function parseArrays(buf: ArrayBuffer, header: TraceHeader): TraceArrays {
   const causeEventId = new BigInt64Array(N); causeEventId.fill(-1n);
   const constraintId = new Int32Array(N); constraintId.fill(-1);
   const constraintLevel = new Int16Array(N); constraintLevel.fill(-1);
+  const pudLayout = new Int8Array(N);
+  const requiredView = new Int8Array(N); requiredView.fill(-1);
+  const layoutId = new BigInt64Array(N); layoutId.fill(-1n);
+  const layoutVersion = new BigInt64Array(N); layoutVersion.fill(-1n);
   let tieOffsets = new BigUint64Array(N + 1);
   let tieSourceEventId = new BigInt64Array(0);
   let tieConstraintId = new Int32Array(0);
@@ -259,6 +270,18 @@ function parseArrays(buf: ArrayBuffer, header: TraceHeader): TraceArrays {
       for (let i = 0; i < tieCount; i++) tieConstraintId[i] = view.getInt32(offset + i * 4, true);
       offset += tieCount * 4;
       for (let i = 0; i < tieCount; i++) tieConstraintLevel[i] = view.getInt16(offset + i * 2, true);
+      offset += tieCount * 2;
+    }
+    const hasOperationMetadata = header.version[0] > 1
+      || (header.version[0] === 1 && header.version[1] >= 4);
+    if (hasOperationMetadata && (header.flags & 4) !== 0) {
+      for (let i = 0; i < N; i++) pudLayout[i] = view.getInt8(offset + i);
+      offset += N;
+      for (let i = 0; i < N; i++) requiredView[i] = view.getInt8(offset + i);
+      offset += N;
+      for (let i = 0; i < N; i++) layoutId[i] = view.getBigInt64(offset + i * 8, true);
+      offset += N * 8;
+      for (let i = 0; i < N; i++) layoutVersion[i] = view.getBigInt64(offset + i * 8, true);
     }
   } else {
     for (let i = 0; i < N; i++) eventId[i] = BigInt(i);
@@ -266,6 +289,7 @@ function parseArrays(buf: ArrayBuffer, header: TraceHeader): TraceArrays {
 
   return { clk, arrive, cmdId, typeId, sourceId, addr, eventId, requestId, finalCmdId,
     selectedView, viewCommitted, readyAt, causeEventId, constraintId, constraintLevel,
+    pudLayout, requiredView, layoutId, layoutVersion,
     tieOffsets, tieSourceEventId, tieConstraintId, tieConstraintLevel };
 }
 

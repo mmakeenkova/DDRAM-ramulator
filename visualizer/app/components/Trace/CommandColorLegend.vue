@@ -19,8 +19,13 @@
         <p class="text-xs text-zinc-500 leading-snug">
           <template v-if="uiStore.viewMode === 'command'">
             <strong>Command View Colors</strong> <br>
-            Swatches open a larger picker. <br>
-            Overrides persist by command name.
+            <template v-if="uiStore.colorByOperation">
+              Request-owned commands use deterministic operation colors; requestless events retain command colors.
+            </template>
+            <template v-else>
+              Swatches open a larger picker. <br>
+              Overrides persist by command name.
+            </template>
           </template>
           <template v-else>
             <strong>Request View Colors</strong> <br>

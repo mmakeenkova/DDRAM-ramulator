@@ -15,6 +15,7 @@ import {
   autoPrechargePhases,
   AUTO_PRECHARGE_COLOR,
   AUTO_PRECHARGE_RECOVERY_COLOR,
+  eventLayoutShortLabel,
   eventView,
   ROW_ACCESS_HIT,
   ROW_HIT_BORDER_COLOR,
@@ -47,6 +48,15 @@ const NAV_ZOOM_REQ_CYCLES = 400;
 /** Extra cycles beyond ~2.5× (queue+active) when framing a request after navigation. */
 const NAV_ZOOM_REQ_PAD = 160;
 const BG_COLOR: [number, number, number, number] = [24 / 255, 24 / 255, 27 / 255, 1];
+const OPERATION_PALETTE = [
+  '#6554d9', '#ff9b42', '#4fd752', '#4b7fbd', '#cf3bdb',
+  '#56b09a', '#9d2bea', '#dd6777', '#a7e35b', '#469873',
+] as const;
+
+function operationColor(requestId: bigint): string {
+  const n = requestId < 0n ? -requestId : requestId;
+  return OPERATION_PALETTE[Number(n % BigInt(OPERATION_PALETTE.length))]!;
+}
 
 /** Vertical gridline color for major ticks (subtle, semi-transparent). */
 const VGRID_COLOR = 'rgba(255, 255, 255, 0.06)';
@@ -364,6 +374,10 @@ export interface HitResult {
   constraintLevel?: number;
   isInternal?: boolean;
   isRowHit?: boolean;
+  pudLayout?: number;
+  requiredView?: number;
+  layoutId?: bigint;
+  layoutVersion?: bigint;
 }
 
 interface TimingEdgeHitRegion {
@@ -442,6 +456,8 @@ function buildLaneIndices(
   strides: number[],
   depth: number,
   N: number,
+  arrays?: TraceArrays,
+  spec?: TraceSpec,
 ): Uint16Array {
   const out = new Uint16Array(N);
   for (let i = 0; i < N; i++) {
@@ -450,7 +466,12 @@ function buildLaneIndices(
       const a = addr[k]![i]!;
       if (a >= 0) flat += a * strides[k]!;
     }
-    out[i] = flat;
+    if (arrays && spec) {
+      const view = eventView(arrays, spec, i);
+      out[i] = flat * 3 + (view === 0 || view === 1 ? view : 2);
+    } else {
+      out[i] = flat;
+    }
   }
   return out;
 }
@@ -500,6 +521,10 @@ function getMaxCommandDuration(spec: TraceSpec | null | undefined): number {
   for (let i = 0; i < spec.commandCycles.length; i++)
     maxDuration = Math.max(maxDuration, spec.commandCycles[i] ?? CMD_VIEW_DURATION);
   return maxDuration;
+}
+
+function supportsDualViewLanes(spec: TraceSpec | null | undefined): boolean {
+  return spec?.commandNames.some(name => /(?:^|_)[AB]$/i.test(name)) ?? false;
 }
 
 interface DataBusArrays {
@@ -714,6 +739,7 @@ function buildSwimlaneLookup(
   totalLanes: number,
   canvasTop: number,
   busType: BusType,
+  splitViews = false,
 ): Float32Array {
   const size = Math.max(totalLanes, 1);
   const data = new Float32Array(size * 4);
@@ -727,7 +753,16 @@ function buildSwimlaneLookup(
     for (let k = 0; k < row.depth; k++) base += row.path[k]! * strides[k]!;
     const range = strides[row.depth - 1]!;
 
-    for (let j = 0; j < range; j++) data[(base + j) * 4] = yCenter;
+    for (let j = 0; j < range; j++) {
+      if (busType === 'command') {
+        const lane = (base + j) * 3;
+        data[lane * 4] = splitViews ? row.top + row.height * 0.27 - canvasTop : yCenter;
+        data[(lane + 1) * 4] = splitViews ? row.top + row.height * 0.73 - canvasTop : yCenter;
+        data[(lane + 2) * 4] = yCenter;
+      } else {
+        data[(base + j) * 4] = yCenter;
+      }
+    }
   }
 
   return data;
@@ -1039,6 +1074,7 @@ export function useRenderer(
     if (cmdSwimlaneTex) {
       cmdSwimlaneData = buildSwimlaneLookup(
         rows, cmdStrides, cmdTotalLanes, canvasTop, 'command',
+        uiStore.splitViewLanes && supportsDualViewLanes(sessionStore.spec),
       );
       (cmdSwimlaneTex as any)({
         width: Math.max(cmdTotalLanes, 1), height: 1,
@@ -1146,6 +1182,10 @@ export function useRenderer(
         constraintLevel: arrays.constraintLevel[origIdx],
         isInternal: spec.commandMeta[cid]?.isInternal ?? false,
         isRowHit: sessionStore.rowHitClass[origIdx] === ROW_ACCESS_HIT,
+        pudLayout: arrays.pudLayout[origIdx],
+        requiredView: arrays.requiredView[origIdx],
+        layoutId: arrays.layoutId[origIdx],
+        layoutVersion: arrays.layoutVersion[origIdx],
       };
 
       if (busType === 'data') {
@@ -1205,6 +1245,10 @@ export function useRenderer(
         finalCmdId: arrays.finalCmdId[origIdx],
         selectedView: eventView(arrays, sessionStore.spec!, origIdx),
         viewCommitted: arrays.viewCommitted[origIdx] !== 0,
+        pudLayout: arrays.pudLayout[origIdx],
+        requiredView: arrays.requiredView[origIdx],
+        layoutId: arrays.layoutId[origIdx],
+        layoutVersion: arrays.layoutVersion[origIdx],
       };
     }
 
@@ -1514,6 +1558,8 @@ export function useRenderer(
     const relEnd = relStart + vw;
     const viewBase = Math.floor(relStart);
     const viewFrac = relStart - viewBase;
+    const splitViewLanes = uiStore.splitViewLanes && supportsDualViewLanes(spec);
+    const commandLaneGroup = (lane: number) => splitViewLanes ? lane : Math.floor(lane / 3);
 
     // ── Vertical gridlines at major ticks ───────────────────────
     {
@@ -1733,6 +1779,71 @@ export function useRenderer(
       ctx.shadowBlur = 0;
     };
 
+    // DDRAM view mode: split each visible command hierarchy row into A and B.
+    // Commands without a view (for example rank-wide maintenance) remain on
+    // the center line. Timing arrows consume the same per-event Y coordinates,
+    // so view-local and cross-view dependencies need no special routing path.
+    if (uiStore.viewMode === 'command' && splitViewLanes) {
+      const canvasTop = el.getBoundingClientRect().top;
+      ctx.save();
+      ctx.font = '8px ui-monospace, JetBrains Mono, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      for (const row of uiStore.rowLayout) {
+        if (row.busType !== 'command') continue;
+        const top = row.top - canvasTop;
+        const mid = top + row.height / 2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(mid) + 0.5);
+        ctx.lineTo(el.width, Math.round(mid) + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(34,211,238,0.78)';
+        ctx.fillText('A', 4, top + row.height * 0.27);
+        ctx.fillStyle = 'rgba(244,114,182,0.78)';
+        ctx.fillText('B', 4, top + row.height * 0.73);
+      }
+      ctx.restore();
+    }
+
+    // Operation colors are keyed by stable controller request ID. This makes
+    // prerequisites and their final PuD command visually form one operation,
+    // while the command name and semantic borders retain opcode/view meaning.
+    if (uiStore.viewMode === 'command' && uiStore.colorByOperation
+      && cmdRelClk && cmdLaneIdx && cmdSwimlaneData && N > 0) {
+      const first = Math.max(0, bisectLeft(cmdRelClk, relStart - getMaxCommandDuration(spec), N));
+      const last = Math.min(N, bisectRight(cmdRelClk, relEnd, N));
+      if (last - first <= TIMING_EDGE_MAX_VISIBLE) {
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        for (let i = first; i < last; i++) {
+          const requestId = arrays.requestId[i] ?? -1n;
+          if (requestId < 0n) continue;
+          const x = ((Number(arrays.clk[i]!) - viewState.start) / vw) * el.width;
+          const width = Math.max(2, getCommandDuration(spec, arrays.cmdId[i]!) * pxPerCycle);
+          const y = cmdSwimlaneData[cmdLaneIdx[i]! * 4]!;
+          ctx.fillStyle = operationColor(requestId);
+          ctx.fillRect(x, y - ROW_HEIGHT / 2, width, ROW_HEIGHT);
+        }
+        if (dataBusVisible && dataBus && dataSwimlaneData) {
+          const dataFirst = Math.max(0, bisectLeft(dataBus.relClk, relStart - dataNBL, dataBus.count));
+          const dataLast = Math.min(dataBus.count, bisectRight(dataBus.relClk, relEnd, dataBus.count));
+          for (let j = dataFirst; j < dataLast; j++) {
+            const originalIndex = dataBus.originalIndices[j]!;
+            const requestId = arrays.requestId[originalIndex] ?? -1n;
+            if (requestId < 0n) continue;
+            const x = ((referenceTime + dataBus.relClk[j]! - viewState.start) / vw) * el.width;
+            const width = Math.max(2, dataNBL * pxPerCycle);
+            const y = dataSwimlaneData[dataBus.laneIdx[j]! * 4]!;
+            ctx.fillStyle = operationColor(requestId);
+            ctx.fillRect(x, y - ROW_HEIGHT / 2, width, ROW_HEIGHT);
+          }
+        }
+        ctx.restore();
+      }
+    }
+
     // RDA/WRA carry an internal operation that has no separate PRE command in
     // the trace. Show the access-recovery portion as a dashed lead-in and the
     // actual nRP precharge as an orange bracket below the command lane.
@@ -1892,8 +2003,10 @@ export function useRenderer(
             const sourceY = cmdSwimlaneData![cmdLaneIdx![cause.sourceIndex]! * 4]!;
             const sourceLane = cmdLaneIdx![cause.sourceIndex]!;
             const targetLane = cmdLaneIdx![targetIndex]!;
-            const sameLane = sourceLane === targetLane;
-            const routeGroup = sameLane ? `lane:${targetLane}` : `cross:${sourceLane}:${targetLane}`;
+            const sourceGroup = commandLaneGroup(sourceLane);
+            const targetGroup = commandLaneGroup(targetLane);
+            const sameLane = sourceGroup === targetGroup;
+            const routeGroup = sameLane ? `lane:${targetGroup}` : `cross:${sourceGroup}:${targetGroup}`;
             const ends = routeEnds.get(routeGroup) ?? [];
             const intervalStart = Math.min(sourceX, targetX);
             const intervalEnd = Math.max(sourceX, targetX);
@@ -1996,7 +2109,8 @@ export function useRenderer(
           const sourceStartX = ((Number(cause.sourceClk) - viewState.start) / vw) * el.width;
           const sourceX = sourceStartX + sourceDuration * pxPerCycle;
           const sourceY = cmdSwimlaneData![cmdLaneIdx![cause.sourceIndex]! * 4]!;
-          const sameLane = cmdLaneIdx![cause.sourceIndex] === cmdLaneIdx![targetIndex];
+          const sameLane = commandLaneGroup(cmdLaneIdx![cause.sourceIndex]!)
+            === commandLaneGroup(cmdLaneIdx![targetIndex]!);
           const routeSlot = timingEdgeRouteSlots.get(
             `${targetIndex}:${cause.constraintId}:${cause.sourceEventId}`,
           ) ?? (causeIndex % TIMING_EDGE_TRACK_OFFSETS.length);
@@ -2108,7 +2222,10 @@ export function useRenderer(
             const sx = ((cxWorld - viewFrac) / vw) * el.width;
             const lane = cmdLaneIdx[i]!;
             const y = cmdSwimlaneData[lane * 4]!;
-            drawLabel(sx, y, spec.commandNames[cid] ?? '?');
+            const layout = eventLayoutShortLabel(arrays, i);
+            drawLabel(sx, y, layout
+              ? `${spec.commandNames[cid] ?? '?'} · ${layout}`
+              : spec.commandNames[cid] ?? '?');
           }
         }
       }
@@ -2300,6 +2417,10 @@ export function useRenderer(
       constraintLevel: arrays.constraintLevel[bestTarget],
       isInternal: spec.commandMeta[arrays.cmdId[bestTarget]!]?.isInternal ?? false,
       isRowHit: sessionStore.rowHitClass[bestTarget] === ROW_ACCESS_HIT,
+      pudLayout: arrays.pudLayout[bestTarget],
+      requiredView: arrays.requiredView[bestTarget],
+      layoutId: arrays.layoutId[bestTarget],
+      layoutVersion: arrays.layoutVersion[bestTarget],
     };
   }
 
@@ -2378,6 +2499,7 @@ export function useRenderer(
         cmdId: rawArrays.cmdId,
         typeId: rawArrays.typeId,
         sourceId: rawArrays.sourceId,
+        selectedView: rawArrays.selectedView,
         addr: toRaw(rawArrays.addr).map(a => toRaw(a)),
       },
       spec: {
@@ -2618,7 +2740,7 @@ export function useRenderer(
       // Command and data buses share the same lane tiling (full hierarchy to Row / structural depth).
       const laneS = computeStrides(spec.levelSizes, structDepth);
       cmdStrides = laneS.strides;
-      cmdTotalLanes = laneS.totalLanes;
+      cmdTotalLanes = laneS.totalLanes * 3;
       dataStrides = laneS.strides;
       dataTotalLanes = laneS.totalLanes;
 
@@ -2627,7 +2749,7 @@ export function useRenderer(
       if (!skipProgressUi) await bumpLoadStatus('Computing command clocks and lanes…');
       // Command bus: all events, unshifted clocks, full-depth lane indices (synced with sidebar/data bus).
       cmdRelClk = buildRelativeClocks(arrays.clk, N, referenceTime);
-      cmdLaneIdx = buildLaneIndices(arrays.addr, cmdStrides, structDepth, N);
+      cmdLaneIdx = buildLaneIndices(arrays.addr, cmdStrides, structDepth, N, arrays, spec);
 
       if (!skipProgressUi) await bumpLoadStatus('Building data bus…');
       // Data bus arrays: only accessing events, clocks offset by nCL/nCWL

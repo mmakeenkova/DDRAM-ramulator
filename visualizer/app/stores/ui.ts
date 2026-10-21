@@ -9,6 +9,8 @@ const TIMELINE_NS_STORAGE_KEY = 'ramulator2-visualizer-timeline-ns';
 const ROW_HIT_HIGHLIGHT_STORAGE_KEY = 'ramulator2-visualizer-highlight-row-hits';
 const VIEW_BORDER_STORAGE_KEY = 'ramulator2-visualizer-view-borders';
 const AUTO_PRECHARGE_STORAGE_KEY = 'ramulator2-visualizer-auto-precharge';
+const SPLIT_VIEW_LANES_STORAGE_KEY = 'ramulator2-visualizer-split-view-lanes';
+const COLOR_BY_OPERATION_STORAGE_KEY = 'ramulator2-visualizer-color-by-operation';
 
 export interface RowLayout {
   top: number;
@@ -32,6 +34,8 @@ export const useUIStore = defineStore('ui', {
     highlightRowHits: true,
     colorByView: false,
     showAutoPrecharge: true,
+    splitViewLanes: false,
+    colorByOperation: false,
     /** After navigation, scroll the sidebar so this hierarchy row is centered (consumed in trace layout). */
     treeScrollTarget: null as null | { busType: BusType; path: number[] },
   }),
@@ -45,6 +49,8 @@ export const useUIStore = defineStore('ui', {
         this.colorByView = localStorage.getItem(VIEW_BORDER_STORAGE_KEY) === 'true';
         const autoPrecharge = localStorage.getItem(AUTO_PRECHARGE_STORAGE_KEY);
         this.showAutoPrecharge = autoPrecharge == null ? true : autoPrecharge === 'true';
+        this.splitViewLanes = localStorage.getItem(SPLIT_VIEW_LANES_STORAGE_KEY) === 'true';
+        this.colorByOperation = localStorage.getItem(COLOR_BY_OPERATION_STORAGE_KEY) === 'true';
       } catch {
         /* ignore */
       }
@@ -81,6 +87,25 @@ export const useUIStore = defineStore('ui', {
       if (!import.meta.client) return;
       try {
         localStorage.setItem(AUTO_PRECHARGE_STORAGE_KEY, String(value));
+      } catch {
+        /* ignore */
+      }
+    },
+    setSplitViewLanes(value: boolean) {
+      this.splitViewLanes = value;
+      this.layoutVersion++;
+      if (!import.meta.client) return;
+      try {
+        localStorage.setItem(SPLIT_VIEW_LANES_STORAGE_KEY, String(value));
+      } catch {
+        /* ignore */
+      }
+    },
+    setColorByOperation(value: boolean) {
+      this.colorByOperation = value;
+      if (!import.meta.client) return;
+      try {
+        localStorage.setItem(COLOR_BY_OPERATION_STORAGE_KEY, String(value));
       } catch {
         /* ignore */
       }

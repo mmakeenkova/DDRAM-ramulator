@@ -29,7 +29,8 @@ def _trace_bytes(version):
     data_offset = (64 + len(spec) + 7) & ~7
     header = bytearray(64)
     header[:8] = b"RAM2BIN\0"
-    struct.pack_into("<BBH", header, 8, *version, int(version >= (1, 2)))
+    flags = int(version >= (1, 2)) | (4 if version >= (1, 4) else 0)
+    struct.pack_into("<BBH", header, 8, *version, flags)
     struct.pack_into("<HHHHHH", header, 12, 3, 2, 1, 64, 8, 8)
     struct.pack_into("<IiQQ", header, 24, 0, 16, 2, data_offset)
     header[48:55] = b"DDRAM_P"
@@ -57,10 +58,15 @@ def _trace_bytes(version):
             data += _pack_array("q", (100, 100))
             data += _pack_array("i", (0, 1))
             data += _pack_array("h", (2, 0))
+        if version >= (1, 4):
+            data += _pack_array("b", (0, 1))
+            data += _pack_array("b", (-1, 1))
+            data += _pack_array("q", (-1, 7))
+            data += _pack_array("q", (-1, 3))
     return bytes(header) + spec + bytes(data_offset - 64 - len(spec)) + data
 
 
-@pytest.mark.parametrize("version", [(1, 0), (1, 1), (1, 2), (1, 3)])
+@pytest.mark.parametrize("version", [(1, 0), (1, 1), (1, 2), (1, 3), (1, 4)])
 def test_reader_preserves_old_trace_compatibility(version):
     trace = Trace(_trace_bytes(version))
 
@@ -83,3 +89,7 @@ def test_reader_preserves_old_trace_compatibility(version):
         assert [cause.constraint.label for cause in causes] == (
             ["nRCD", "command bus"] if version >= (1, 3) else ["nRCD"]
         )
+        if version >= (1, 4):
+            assert trace.events[1].layout == "BitSerial"
+            assert (trace.events[1].required_view, trace.events[1].layout_id,
+                    trace.events[1].layout_version) == (1, 7, 3)
